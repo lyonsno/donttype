@@ -1529,6 +1529,7 @@ def test_optical_shell_kernel_uses_single_depth_remap_curve():
     assert "float capsuleSdf = sdCapsule(p, spineHalf, capsuleRadius);" in source
     assert "depthRemap" in source
     assert "vec2(scaleX, scaleY)" in source
+    assert "capsuleN * pushAmount" in source
 
 
 def test_optical_shell_kernel_accepts_live_axis_squeeze_args():

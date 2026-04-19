@@ -257,6 +257,7 @@ kernel vec2 opticalShellWarp(
 
     float bleedZone = capsuleRadius * %(bleed_frac)s;
     if (capsuleSdf > bleedZone) return d;
+    vec2 capsuleN = capsuleGradient(p, spineHalf);
 
     float curveBoost = min(
         %(cb_cap)s,
@@ -276,18 +277,20 @@ kernel vec2 opticalShellWarp(
 
     float scaleX = pow(max(scale, 0.0), xSqueeze);
     float scaleY = pow(max(scale, 0.0), ySqueeze);
-    vec2 warped = c + p * vec2(scaleX, scaleY);
 
-    float exteriorT = max(capsuleSdf, 0.0);
-    float seamRamp = smoothstep(0.0, 2.0, exteriorT);
-    float magDecay = exp(-exteriorT / capsuleRadius * %(ext_mag_decay)s);
-    vec2 n = capsuleGradient(p, spineHalf);
-    float tipDist = max(abs(p.x) - spineHalf, 0.0);
-    float tipAtten = 1.0 - smoothstep(0.0, capsuleRadius * 0.8, tipDist);
-    float mag = %(ext_mag_strength)s * capsuleRadius * seamRamp * magDecay * tipAtten;
-    vec2 result = warped - n * mag;
-    result = clamp(result, vec2(0.0, 0.0), vec2(width, height));
-    return result;
+    // Interior: radial scaling from center.
+    // Exterior: push along capsule normal (outward from surface).
+    // This makes content deflect around the pill rather than toward center.
+    vec2 src;
+    if (capsuleSdf <= 0.0) {
+        src = c + p * vec2(scaleX, scaleY);
+    } else {
+        float pushAmount = curveBoost * capsuleRadius * 0.15
+            * exp(-capsuleSdf * 0.4);
+        src = d + capsuleN * pushAmount;
+    }
+    src = clamp(src, vec2(0.0, 0.0), vec2(width, height));
+    return src;
 }
 """ % {
         "bleed_frac": _WARP_BLEED_ZONE_FRAC,
