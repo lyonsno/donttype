@@ -188,7 +188,8 @@ def test_axis_audit_prompt_forces_dimension_by_dimension_candidate_review():
     assert "vertical center" in AXIS_AUDIT_SYSTEM
     assert "A dimension may be kept only if it already satisfies" in AXIS_AUDIT_SYSTEM
     assert "Do not fix only one axis" in AXIS_AUDIT_SYSTEM
-    assert "done: YES or NO" in AXIS_AUDIT_SYSTEM
+    assert "valid JSON object" in AXIS_AUDIT_SYSTEM
+    assert '"justification"' in AXIS_AUDIT_SYSTEM
 
 
 def test_axis_audit_headers_are_round_addressable():
@@ -204,11 +205,12 @@ def test_axis_audit_headers_are_round_addressable():
 
 
 def test_parse_axis_audit_response_keeps_and_clamps_dimensions():
-    """Axis audit parser accepts KEEP and clamps pixel edits to the screen."""
+    """Axis audit parser accepts JSON KEEP fields and clamps pixel edits."""
     from spoke.positioning.reposition import _parse_axis_audit_response
 
     audit = _parse_axis_audit_response(
-        "x: KEEP\ny: 900\nwidth: 2600\nheight: KEEP\ndone: NO",
+        '{"x":"KEEP","y":900,"width":2600,"height":"KEEP","done":false,'
+        '"justification":"still covers the text vertically"}',
         screen_w=1920,
         screen_h=1080,
     )
@@ -219,7 +221,19 @@ def test_parse_axis_audit_response_keeps_and_clamps_dimensions():
         "width": 1920,
         "height": "KEEP",
         "done": False,
+        "justification": "still covers the text vertically",
     }
+
+    fenced = _parse_axis_audit_response(
+        '```json\n{"x":500,"y":"KEEP","width":"KEEP","height":200,'
+        '"done":true,"justification":"candidate is clear"}\n```',
+        screen_w=1920,
+        screen_h=1080,
+    )
+    assert fenced["x"] == 500
+    assert fenced["height"] == 200
+    assert fenced["done"] is True
+    assert fenced["justification"] == "candidate is clear"
 
 
 def test_iterative_axis_audit_rerenders_candidate_until_done(monkeypatch):
@@ -269,6 +283,7 @@ def test_iterative_axis_audit_rerenders_candidate_until_done(monkeypatch):
     assert result["y"] == pytest.approx(0.05)
     assert result["width"] == pytest.approx(0.4)
     assert result["height"] == pytest.approx(0.4)
+    assert result["_debug_lines"][-1].startswith("Total:")
     assert len(encoded) == 4  # initial grid pick plus three candidate audits
     assert outlined[-3:] == [
         {"x": 0.3, "y": 0.3, "width": 0.4, "height": 0.4},
@@ -331,6 +346,75 @@ D4: NO"""
 
 
 # ── smoke hook tests ──
+
+def test_positioning_bearing_is_disabled_by_default(monkeypatch):
+    """Bearing compute should not run in the positioning hot path by default."""
+    from spoke.positioning.smoke_hook import _positioning_bearing_enabled
+
+    monkeypatch.delenv("SPOKE_POSITIONING_ENABLE_BEARING", raising=False)
+
+    assert _positioning_bearing_enabled() is False
+
+
+def test_positioning_smoke_text_includes_debug_trace():
+    """The movable positioned overlay should carry the diagnostic trace."""
+    from spoke.positioning.smoke_hook import _build_positioning_smoke_text
+
+    text = _build_positioning_smoke_text(
+        {
+            "utterance": "move out of the text",
+            "content_desc": "move out of the text",
+            "elapsed_s": 2.0,
+            "_debug_lines": [
+                "GridPoint: C3 -> (1296, 837)",
+                "Audit 1: x=KEEP y=900 width=1300 height=500 done=False",
+                "Audit 2 justification: no longer covers text",
+            ],
+        }
+    )
+
+    assert "move out of the text" in text
+    assert "GridPoint: C3" in text
+    assert "Audit 2 justification" in text
+    assert "2.0s total" in text
+
+
+def test_finish_on_main_puts_debug_trace_in_smoke_rect_not_fixed_diag():
+    """Final positioning diagnostics should live in the movable smoke rect."""
+    import spoke.positioning.smoke_hook as smoke_hook
+
+    class Frame:
+        def __getitem__(self, index):
+            return ((0.0, 0.0), (100.0, 100.0))[index]
+
+    app = MagicMock()
+    app._transcribing = True
+    app._detector = MagicMock()
+    app._menubar = None
+    app._overlay = None
+    app._command_overlay = None
+    app._fullscreen_compositor = None
+
+    result = {
+        "x": 0.25,
+        "y": 0.25,
+        "width": 0.5,
+        "height": 0.5,
+        "utterance": "move away from text",
+        "content_desc": "move away from text",
+        "elapsed_s": 1.25,
+        "_debug_lines": ["Audit 1: width=KEEP", "Audit 1 justification: clear"],
+    }
+
+    with patch.object(smoke_hook, "_get_main_screen_frame", return_value=Frame()), \
+         patch.object(smoke_hook, "_show_smoke_rect") as show_smoke, \
+         patch.object(smoke_hook, "_show_diagnostic_overlay") as show_diag:
+        _run_finish_on_main(app, result)
+
+    show_diag.assert_not_called()
+    smoke_text = show_smoke.call_args.args[4]
+    assert "Audit 1: width=KEEP" in smoke_text
+    assert "Audit 1 justification: clear" in smoke_text
 
 def test_finish_on_main_with_none_doesnt_crash():
     """Calling _finish_on_main with None result should not crash."""

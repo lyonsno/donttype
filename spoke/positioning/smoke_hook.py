@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import numbers
+import os
 import threading
 import time
 from dataclasses import replace
@@ -102,15 +103,13 @@ def positioning_transcribe_worker(app, wav_bytes: bytes, token: int) -> None:
         screen_dims = _get_main_screen_frame_for_worker()
         scr_w = int(screen_dims[0]) if screen_dims else 1920
         scr_h = int(screen_dims[1]) if screen_dims else 1080
-        bearing = getattr(app, '_positioning_bearing', None)
+        bearing = getattr(app, '_positioning_bearing', None) if _positioning_bearing_enabled() else None
 
         def _on_step_iter(debug_lines, intermediate=None):
             from PyObjCTools import AppHelper
             if intermediate and intermediate.get("_intermediate"):
+                intermediate["_debug_lines"] = debug_lines
                 AppHelper.callAfter(lambda: _finish_on_main_immediate(app, intermediate))
-            partial = {"utterance": text, "elapsed_s": 0, "x": 0, "y": 0, "width": 0, "height": 0,
-                        "content_desc": "running..."}
-            AppHelper.callAfter(lambda: _show_diagnostic_overlay(partial, debug_lines))
 
         try:
             result = reposition_gridpoint_iterative(text, screenshot, current_overlay,
@@ -126,7 +125,7 @@ def positioning_transcribe_worker(app, wav_bytes: bytes, token: int) -> None:
         pipeline_fn = reposition_gridpoint_iterative
 
         screenshot_b64 = result.pop("_screenshot_b64", None)
-        if screenshot_b64:
+        if screenshot_b64 and _positioning_bearing_enabled():
             def _update_bearing_bg():
                 try:
                     new_bearing = update_bearing(
@@ -153,15 +152,13 @@ def positioning_transcribe_worker(app, wav_bytes: bytes, token: int) -> None:
         screen_dims = _get_main_screen_frame_for_worker()
         scr_w = int(screen_dims[0]) if screen_dims else 1920
         scr_h = int(screen_dims[1]) if screen_dims else 1080
-        bearing = getattr(app, '_positioning_bearing', None)
+        bearing = getattr(app, '_positioning_bearing', None) if _positioning_bearing_enabled() else None
 
         def _on_step_gp(debug_lines, intermediate=None):
             from PyObjCTools import AppHelper
             if intermediate and intermediate.get("_intermediate"):
+                intermediate["_debug_lines"] = debug_lines
                 AppHelper.callAfter(lambda: _finish_on_main_immediate(app, intermediate))
-            partial = {"utterance": text, "elapsed_s": 0, "x": 0, "y": 0, "width": 0, "height": 0,
-                        "content_desc": "running..."}
-            AppHelper.callAfter(lambda: _show_diagnostic_overlay(partial, debug_lines))
 
         try:
             result = reposition_gridpoint(text, screenshot, current_overlay,
@@ -177,7 +174,7 @@ def positioning_transcribe_worker(app, wav_bytes: bytes, token: int) -> None:
         pipeline_fn = reposition_gridpoint
 
         screenshot_b64 = result.pop("_screenshot_b64", None)
-        if screenshot_b64:
+        if screenshot_b64 and _positioning_bearing_enabled():
             def _update_bearing_bg():
                 try:
                     new_bearing = update_bearing(
@@ -204,16 +201,14 @@ def positioning_transcribe_worker(app, wav_bytes: bytes, token: int) -> None:
         screen_dims = _get_main_screen_frame_for_worker()
         scr_w = int(screen_dims[0]) if screen_dims else 1920
         scr_h = int(screen_dims[1]) if screen_dims else 1080
-        bearing = getattr(app, '_positioning_bearing', None)
+        bearing = getattr(app, '_positioning_bearing', None) if _positioning_bearing_enabled() else None
 
         def _on_step_cs(debug_lines, intermediate=None):
             from PyObjCTools import AppHelper
             if intermediate and intermediate.get("_intermediate"):
                 # Move the overlay immediately with current size
+                intermediate["_debug_lines"] = debug_lines
                 AppHelper.callAfter(lambda: _finish_on_main_immediate(app, intermediate))
-            partial = {"utterance": text, "elapsed_s": 0, "x": 0, "y": 0, "width": 0, "height": 0,
-                        "content_desc": "running..."}
-            AppHelper.callAfter(lambda: _show_diagnostic_overlay(partial, debug_lines))
 
         try:
             result = reposition_centersize(text, screenshot, current_overlay,
@@ -229,7 +224,7 @@ def positioning_transcribe_worker(app, wav_bytes: bytes, token: int) -> None:
         pipeline_fn = reposition_centersize
 
         screenshot_b64 = result.pop("_screenshot_b64", None)
-        if screenshot_b64:
+        if screenshot_b64 and _positioning_bearing_enabled():
             def _update_bearing_bg():
                 try:
                     new_bearing = update_bearing(
@@ -258,13 +253,10 @@ def positioning_transcribe_worker(app, wav_bytes: bytes, token: int) -> None:
         scr_h = int(screen_dims[1]) if screen_dims else 1080
 
         # Get previous bearing if available
-        bearing = getattr(app, '_positioning_bearing', None)
+        bearing = getattr(app, '_positioning_bearing', None) if _positioning_bearing_enabled() else None
 
         def _on_step_bbox(debug_lines):
-            partial = {"utterance": text, "elapsed_s": 0, "x": 0, "y": 0, "width": 0, "height": 0,
-                        "content_desc": "running..."}
-            from PyObjCTools import AppHelper
-            AppHelper.callAfter(lambda: _show_diagnostic_overlay(partial, debug_lines))
+            return None
 
         try:
             result = reposition_bbox(text, screenshot, current_overlay,
@@ -281,7 +273,7 @@ def positioning_transcribe_worker(app, wav_bytes: bytes, token: int) -> None:
 
         # Fire background bearing update — runs after overlay moves
         screenshot_b64 = result.pop("_screenshot_b64", None)
-        if screenshot_b64:
+        if screenshot_b64 and _positioning_bearing_enabled():
             def _update_bearing_bg():
                 try:
                     new_bearing = update_bearing(
@@ -307,12 +299,7 @@ def positioning_transcribe_worker(app, wav_bytes: bytes, token: int) -> None:
                     "width": b.width / sw, "height": b.height / sh,
                 }
         def _on_step(debug_lines):
-            """Update diagnostic overlay incrementally as each step completes."""
-            # Build a partial result dict for the diagnostic overlay
-            partial = {"utterance": text, "elapsed_s": 0, "x": 0, "y": 0, "width": 0, "height": 0,
-                        "content_desc": "running..."}
-            from PyObjCTools import AppHelper
-            AppHelper.callAfter(lambda: _show_diagnostic_overlay(partial, debug_lines))
+            return None
 
         try:
             result = reposition_twostep(text, screenshot, current_overlay, on_step=_on_step)
@@ -382,6 +369,47 @@ def _explicit_attr(obj, name: str, default=None):
     except Exception:
         pass
     return getattr(obj, name, default)
+
+
+def _positioning_bearing_enabled() -> bool:
+    return os.environ.get("SPOKE_POSITIONING_ENABLE_BEARING", "0") == "1"
+
+
+def _build_positioning_smoke_text(
+    result: dict,
+    debug_steps: list[str] | None = None,
+) -> str:
+    """Build the text shown inside the movable positioned smoke rectangle."""
+
+    lines: list[str] = []
+    utterance = str(result.get("utterance", "") or "")
+    content_desc = str(result.get("content_desc", "") or "")
+    if utterance:
+        lines.append(utterance)
+    if content_desc and content_desc != utterance:
+        lines.append(content_desc)
+
+    trace = debug_steps
+    if trace is None:
+        trace = result.get("_debug_lines")
+    if trace:
+        if lines:
+            lines.append("")
+        lines.extend(str(step) for step in trace[-24:])
+
+    elapsed = result.get("elapsed_s", None)
+    if isinstance(elapsed, numbers.Real):
+        if lines:
+            lines.append("")
+        lines.append(f"{float(elapsed):.1f}s total")
+
+    if all(key in result for key in ("x", "y", "width", "height")):
+        lines.append(
+            "x=%.2f y=%.2f w=%.2f h=%.2f"
+            % (result["x"], result["y"], result["width"], result["height"])
+        )
+
+    return "\n".join(lines)
 
 
 def _numeric(value, default: float = 0.0) -> float:
@@ -630,9 +658,7 @@ def _finish_on_main_immediate(app, result: dict) -> None:
     w = result["width"] * sw
     h = result["height"] * sh
     mac_y = sh - y - h
-    utterance = result.get("utterance", "")
-    content_desc = result.get("content_desc", "")
-    smoke_text = f"{utterance}\n\n{content_desc}"
+    smoke_text = _build_positioning_smoke_text(result)
     _show_smoke_rect(x, mac_y, w, h, smoke_text)
 
 
@@ -735,11 +761,25 @@ def _finish_on_main(app, result: dict | None) -> None:
         # Store the last request so position persists across show/hide
         app._positioning_field_request = request
 
+        from .reposition import reposition_gridpoint_iterative as _gpi_fn
+        from .reposition import reposition_gridpoint as _gp_fn
+        from .reposition import reposition_centersize as _cs_fn
+        from .reposition import reposition_bbox as _bbox_fn
+        from .reposition import reposition_twostep as _twostep_fn
+        from .reposition import reposition as _grid_fn
+        debug_steps = (result.get("_debug_lines")
+                       or getattr(_gpi_fn, '_last_debug', None)
+                       or getattr(_gp_fn, '_last_debug', None)
+                       or getattr(_cs_fn, '_last_debug', None)
+                       or getattr(_bbox_fn, '_last_debug', None)
+                       or getattr(_twostep_fn, '_last_debug', None)
+                       or getattr(_grid_fn, '_last_debug', None))
+
         utterance = result.get("utterance", "")
 
-        # Show a standalone smoke rectangle at the computed position
-        # with user prompt + model response text to gauge text capacity
-        smoke_text = f"{utterance}\n\n{content_desc}"
+        # Show a standalone smoke rectangle at the computed position with the
+        # live positioning trace so the operator can move the diagnostics too.
+        smoke_text = _build_positioning_smoke_text(result, debug_steps)
         _show_smoke_rect(x, mac_y, w, h, smoke_text)
 
         # Flash the debug grid showing which cells the model marked YES/NO
@@ -750,19 +790,6 @@ def _finish_on_main(app, result: dict | None) -> None:
             _flash_debug_grid(sw, sh, content_map, content_desc,
                               utterance=utterance, target_mode=positive_mode,
                               elapsed_s=elapsed)
-
-        # Persistent diagnostic overlay in upper right — survives grid dismiss
-        from .reposition import reposition_gridpoint as _gp_fn
-        from .reposition import reposition_centersize as _cs_fn
-        from .reposition import reposition_bbox as _bbox_fn
-        from .reposition import reposition_twostep as _twostep_fn
-        from .reposition import reposition as _grid_fn
-        debug_steps = (getattr(_gp_fn, '_last_debug', None)
-                       or getattr(_cs_fn, '_last_debug', None)
-                       or getattr(_bbox_fn, '_last_debug', None)
-                       or getattr(_twostep_fn, '_last_debug', None)
-                       or getattr(_grid_fn, '_last_debug', None))
-        _show_diagnostic_overlay(result, debug_steps)
 
         if app._menubar is not None:
             app._menubar.set_status_text(

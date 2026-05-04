@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import base64
 import io
+import json
 import os
 import re
 import time
@@ -873,12 +874,16 @@ AXIS_AUDIT_SYSTEM = (
     "is part of the mismatch. Do not fix only one axis when the request implies "
     "both axes. Do not output KEEP for width or height if the current outline "
     "is the wrong size or shape for the request.\n\n"
-    "Output exactly:\n"
-    "x: KEEP or <center_x_px>\n"
-    "y: KEEP or <center_y_px>\n"
-    "width: KEEP or <width_px>\n"
-    "height: KEEP or <height_px>\n"
-    "done: YES or NO\n"
+    "Output a valid JSON object and nothing else:\n"
+    '{"x":"KEEP or <center_x_px>",'
+    '"y":"KEEP or <center_y_px>",'
+    '"width":"KEEP or <width_px>",'
+    '"height":"KEEP or <height_px>",'
+    '"done":true_or_false,'
+    '"justification":"short reason for the edits or why no further change is needed"}\n\n'
+    "The justification is for diagnostics. If done is true, explain why the "
+    "current outline already satisfies the request. If done is false, explain "
+    "the mismatch you are correcting."
 )
 
 
@@ -990,6 +995,7 @@ def _parse_axis_audit_response(
         "width": "KEEP",
         "height": "KEEP",
         "done": False,
+        "justification": "",
     }
     limits = {
         "x": screen_w,
@@ -997,6 +1003,54 @@ def _parse_axis_audit_response(
         "width": screen_w,
         "height": screen_h,
     }
+
+    def _coerce_field(key: str, value) -> int | str:
+        if isinstance(value, str) and value.strip().upper().startswith("KEEP"):
+            return "KEEP"
+        if isinstance(value, (int, float)):
+            parsed = int(float(value))
+        elif isinstance(value, str):
+            match = re.search(r"-?\d+(?:\.\d+)?", value)
+            if not match:
+                return "KEEP"
+            parsed = int(float(match.group(0)))
+        else:
+            return "KEEP"
+        if key in {"width", "height"}:
+            return max(1, min(limits[key], parsed))
+        return max(0, min(limits[key], parsed))
+
+    json_text = raw.strip()
+    if json_text.startswith("```"):
+        json_text = re.sub(r"^```(?:json)?\s*", "", json_text, flags=re.IGNORECASE)
+        json_text = re.sub(r"\s*```$", "", json_text)
+    try:
+        payload = json.loads(json_text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", json_text, flags=re.DOTALL)
+        if match:
+            try:
+                payload = json.loads(match.group(0))
+            except json.JSONDecodeError:
+                payload = None
+        else:
+            payload = None
+
+    if isinstance(payload, dict):
+        for key in ("x", "y", "width", "height"):
+            if key in payload:
+                result[key] = _coerce_field(key, payload[key])
+        if "done" in payload:
+            done = payload["done"]
+            if isinstance(done, bool):
+                result["done"] = done
+            elif isinstance(done, str):
+                result["done"] = done.strip().upper().startswith("Y") or done.strip().lower() == "true"
+        justification = payload.get("justification", "")
+        if justification is not None:
+            result["justification"] = str(justification).strip()
+        return result
+
     for raw_line in raw.splitlines():
         if ":" not in raw_line:
             continue
@@ -1011,15 +1065,7 @@ def _parse_axis_audit_response(
         if value.upper().startswith("KEEP"):
             result[key] = "KEEP"
             continue
-        match = re.search(r"-?\d+(?:\.\d+)?", value)
-        if not match:
-            continue
-        parsed = int(float(match.group(0)))
-        if key in {"width", "height"}:
-            parsed = max(1, min(limits[key], parsed))
-        else:
-            parsed = max(0, min(limits[key], parsed))
-        result[key] = parsed
+        result[key] = _coerce_field(key, value)
     return result
 
 
@@ -1067,7 +1113,7 @@ def _pick_axis_audit(
                     {"type": "text", "text": user_text},
                 ]},
             ],
-            **_sampling_params(max_tokens=64),
+            **_sampling_params(max_tokens=128),
         },
         timeout=120,
     )
@@ -1361,6 +1407,11 @@ def reposition_gridpoint_iterative(
         )
         if raw:
             reposition_gridpoint_iterative._last_debug.append(f"Audit {iteration} raw: {raw}")
+        justification = audit.get("justification")
+        if justification:
+            reposition_gridpoint_iterative._last_debug.append(
+                f"Audit {iteration} justification: {justification}"
+            )
         if audit.get("done") is True:
             break
         updated = _apply_axis_audit(candidate, audit, screen_w=screen_w, screen_h=screen_h)
@@ -1389,6 +1440,7 @@ def reposition_gridpoint_iterative(
         "utterance": utterance,
         "elapsed_s": elapsed,
         "_screenshot_b64": screenshot_b64,
+        "_debug_lines": list(reposition_gridpoint_iterative._last_debug),
     }
 
 
