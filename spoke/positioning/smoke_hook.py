@@ -344,6 +344,7 @@ def positioning_transcribe_worker(app, wav_bytes: bytes, token: int) -> None:
 
 
 _POSITIONING_CALLER_ID = "semantic_positioning"
+_POSITIONING_REOPEN_DELAY_S = 0.16
 _DISPLAY_LOCAL_POINT_KEYS = (
     "content_width_points",
     "content_height_points",
@@ -632,6 +633,54 @@ def _apply_request_to_command_overlay(
         return False
 
 
+def _schedule_command_overlay_reopen(callback) -> None:
+    from PyObjCTools import AppHelper
+
+    def _run_on_main():
+        AppHelper.callAfter(callback)
+
+    threading.Timer(_POSITIONING_REOPEN_DELAY_S, _run_on_main).start()
+
+
+def _present_request_on_command_overlay(
+    app,
+    command_overlay,
+    request: OpticalFieldRequest,
+    diagnostic_text: str,
+    screen_frame,
+) -> bool:
+    if command_overlay is None:
+        return False
+    show = _explicit_attr(command_overlay, "show", None)
+    applier = _explicit_attr(command_overlay, "apply_semantic_positioning_request", None)
+    if not callable(show) or not callable(applier):
+        return False
+
+    cancel = _explicit_attr(command_overlay, "cancel_dismiss", None)
+    if callable(cancel):
+        try:
+            cancel()
+        except Exception:
+            logger.debug("Failed to dismiss command overlay before repositioning", exc_info=True)
+
+    def _materialize_at_new_bounds():
+        app._positioning_field_request = request
+        applied = _apply_request_to_command_overlay(command_overlay, request)
+        try:
+            show(
+                start_thinking_timer=False,
+                initial_response=diagnostic_text,
+            )
+        except Exception:
+            logger.debug("Failed to show command overlay after repositioning", exc_info=True)
+            return
+        if applied:
+            _push_request_to_command_overlay_compositor(command_overlay, request, screen_frame)
+
+    _schedule_command_overlay_reopen(_materialize_at_new_bounds)
+    return True
+
+
 def _request_with_lifecycle(
     request: OpticalFieldRequest,
     *,
@@ -663,7 +712,7 @@ def _reemit_stored_positioning_request(
 
 
 def _finish_on_main_immediate(app, result: dict) -> None:
-    """Move the smoke rect immediately for intermediate center-only results."""
+    """Move the overlay immediately for intermediate center-only results."""
     screen = _get_main_screen_frame()
     if screen is None:
         return
@@ -674,6 +723,16 @@ def _finish_on_main_immediate(app, result: dict) -> None:
     h = result["height"] * sh
     mac_y = sh - y - h
     smoke_text = _build_positioning_smoke_text(result)
+    request = OpticalFieldRequest(
+        caller_id=_POSITIONING_CALLER_ID,
+        bounds=OpticalFieldBounds(x=x, y=mac_y, width=w, height=h),
+        role="assistant",
+        state="materialize",
+        visible=True,
+    )
+    command_overlay = _explicit_attr(app, '_command_overlay', None)
+    if _present_request_on_command_overlay(app, command_overlay, request, smoke_text, screen):
+        return
     _show_smoke_rect(x, mac_y, w, h, smoke_text)
 
 
@@ -738,19 +797,41 @@ def _finish_on_main(app, result: dict | None) -> None:
             visible=True,
         )
 
+        from .reposition import reposition_gridpoint_iterative as _gpi_fn
+        from .reposition import reposition_gridpoint as _gp_fn
+        from .reposition import reposition_centersize as _cs_fn
+        from .reposition import reposition_bbox as _bbox_fn
+        from .reposition import reposition_twostep as _twostep_fn
+        from .reposition import reposition as _grid_fn
+        debug_steps = (result.get("_debug_lines")
+                       or getattr(_gpi_fn, '_last_debug', None)
+                       or getattr(_gp_fn, '_last_debug', None)
+                       or getattr(_cs_fn, '_last_debug', None)
+                       or getattr(_bbox_fn, '_last_debug', None)
+                       or getattr(_twostep_fn, '_last_debug', None)
+                       or getattr(_grid_fn, '_last_debug', None))
+        diagnostic_text = _build_positioning_smoke_text(result, debug_steps)
+
         command_overlay = _explicit_attr(app, '_command_overlay', None)
-        applied_to_command_overlay = _apply_request_to_command_overlay(
+        presented_on_command_overlay = _present_request_on_command_overlay(
+            app,
             command_overlay,
             request,
+            diagnostic_text,
+            screen,
         )
 
         # Main now seats the live compositor session on CommandOverlay. Push the
         # optical-field request through that client contract when available.
-        pushed_to_command_compositor = _push_request_to_command_overlay_compositor(
-            command_overlay,
-            request,
-            screen,
-        )
+        pushed_to_command_compositor = False
+        if not presented_on_command_overlay:
+            pushed_to_command_compositor = _push_request_to_command_overlay_compositor(
+                command_overlay,
+                request,
+                screen,
+            )
+        else:
+            pushed_to_command_compositor = True
         if pushed_to_command_compositor:
             logger.info("Pushed optical field config through command overlay compositor session")
         else:
@@ -782,31 +863,14 @@ def _finish_on_main(app, result: dict | None) -> None:
                 if target is not None:
                     _move_overlay(target, x, mac_y, w, h)
 
-        # Store the last request so position persists across show/hide
-        app._positioning_field_request = request
-
-        from .reposition import reposition_gridpoint_iterative as _gpi_fn
-        from .reposition import reposition_gridpoint as _gp_fn
-        from .reposition import reposition_centersize as _cs_fn
-        from .reposition import reposition_bbox as _bbox_fn
-        from .reposition import reposition_twostep as _twostep_fn
-        from .reposition import reposition as _grid_fn
-        debug_steps = (result.get("_debug_lines")
-                       or getattr(_gpi_fn, '_last_debug', None)
-                       or getattr(_gp_fn, '_last_debug', None)
-                       or getattr(_cs_fn, '_last_debug', None)
-                       or getattr(_bbox_fn, '_last_debug', None)
-                       or getattr(_twostep_fn, '_last_debug', None)
-                       or getattr(_grid_fn, '_last_debug', None))
-
         utterance = result.get("utterance", "")
 
         # Legacy/non-compositor surfaces still need a standalone smoke rectangle
         # for diagnostics. When the real command overlay accepted the request,
         # avoid spawning a second black window over the actual assistant body.
-        if not (applied_to_command_overlay and pushed_to_command_compositor):
-            smoke_text = _build_positioning_smoke_text(result, debug_steps)
-            _show_smoke_rect(x, mac_y, w, h, smoke_text)
+        if not (presented_on_command_overlay and pushed_to_command_compositor):
+            app._positioning_field_request = request
+            _show_smoke_rect(x, mac_y, w, h, diagnostic_text)
 
         # Flash the debug grid showing which cells the model marked YES/NO
         content_map = result.get("content_map")

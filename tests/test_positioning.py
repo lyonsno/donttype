@@ -665,6 +665,8 @@ def test_positioning_applies_semantic_bounds_to_real_command_overlay_when_compos
             self._screen.backingScaleFactor.return_value = 2.0
             self._brightness = 0.42
             self.applied_requests = []
+            self.cancel_dismiss = MagicMock()
+            self.show = MagicMock()
 
         def apply_semantic_positioning_request(self, request):
             self.applied_requests.append(request)
@@ -691,12 +693,85 @@ def test_positioning_applies_semantic_bounds_to_real_command_overlay_when_compos
     }
 
     with patch.object(smoke_hook, "_get_main_screen_frame", return_value=Frame()), \
+         patch.object(smoke_hook, "_schedule_command_overlay_reopen", side_effect=lambda fn: fn()), \
          patch.object(smoke_hook, "_show_smoke_rect") as show_smoke:
         _run_finish_on_main(app, result)
 
     assert len(command_overlay.applied_requests) == 1
     assert command_overlay.applied_requests[0] is app._positioning_field_request
+    command_overlay.show.assert_called_once()
+    show_kwargs = command_overlay.show.call_args.kwargs
+    assert show_kwargs["start_thinking_timer"] is False
+    assert "move out of my way" in show_kwargs["initial_response"]
+    assert "Audit 1 justification: clear" in show_kwargs["initial_response"]
     show_smoke.assert_not_called()
+
+
+def test_positioning_dismisses_old_command_overlay_before_materializing_new_bounds():
+    """Each accepted move should close at the old position before reopening at the new one."""
+    import spoke.positioning.smoke_hook as smoke_hook
+    from spoke.optical_field import OpticalFieldBounds, OpticalFieldRequest
+
+    class Frame:
+        origin = SimpleNamespace(x=0.0, y=0.0)
+        size = SimpleNamespace(width=1440.0, height=900.0)
+
+        def __getitem__(self, index):
+            return ((self.origin.x, self.origin.y), (self.size.width, self.size.height))[index]
+
+    events = []
+
+    class CommandOverlay:
+        def __init__(self):
+            self._fullscreen_compositor = MagicMock()
+            self._screen = MagicMock()
+            self._screen.backingScaleFactor.return_value = 2.0
+            self._brightness = 0.42
+
+        def cancel_dismiss(self):
+            events.append("dismiss")
+
+        def apply_semantic_positioning_request(self, request):
+            events.append(f"apply:{request.state}:{request.bounds.x:.0f}")
+            return True
+
+        def show(self, **kwargs):
+            events.append("show")
+
+    app = MagicMock()
+    app._transcribing = True
+    app._detector = MagicMock()
+    app._menubar = None
+    app._overlay = None
+    app._fullscreen_compositor = None
+    app._command_overlay = CommandOverlay()
+    app._positioning_field_request = OpticalFieldRequest(
+        caller_id="semantic_positioning",
+        bounds=OpticalFieldBounds(x=40.0, y=50.0, width=320.0, height=120.0),
+        role="assistant",
+        state="rest",
+        visible=True,
+    )
+
+    with patch.object(smoke_hook, "_get_main_screen_frame", return_value=Frame()), \
+         patch.object(smoke_hook, "_schedule_command_overlay_reopen", side_effect=lambda fn: fn()), \
+         patch.object(smoke_hook, "_show_smoke_rect"):
+        _run_finish_on_main(
+            app,
+            {
+                "x": 0.25,
+                "y": 0.25,
+                "width": 0.5,
+                "height": 0.5,
+                "utterance": "move out of my way",
+                "content_desc": "avoiding: central text",
+                "elapsed_s": 1.0,
+            },
+        )
+
+    assert events[0] == "dismiss"
+    assert events[1].startswith("apply:materialize:")
+    assert events[2] == "show"
 
 
 def test_positioning_hook_reemits_stored_request_when_command_overlay_shows():
