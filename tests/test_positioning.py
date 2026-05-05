@@ -194,14 +194,62 @@ def test_axis_audit_prompt_forces_dimension_by_dimension_candidate_review():
 
 def test_axis_audit_headers_are_round_addressable():
     """Grapheus logs need enough header structure to reconstruct loop behavior."""
-    from spoke.positioning.reposition import _api_headers
+    from spoke.positioning.reposition import _api_headers, positioning_utterance_scope
 
-    headers = _api_headers("axis-audit", mode="gridpoint-iterative", iteration=2)
+    with positioning_utterance_scope("positioning-token-50"):
+        headers = _api_headers("axis-audit", mode="gridpoint-iterative", iteration=2)
 
     assert headers["X-Spoke-Pathway"] == "positioning"
+    assert headers["X-Spoke-Utterance-ID"] == "positioning-token-50"
     assert headers["X-Spoke-Step"] == "axis-audit"
     assert headers["X-Spoke-Positioning-Mode"] == "gridpoint-iterative"
     assert headers["X-Spoke-Positioning-Iteration"] == "2"
+
+
+def test_positioning_pipeline_reuses_one_utterance_id_across_model_calls(monkeypatch):
+    """A single semantic positioning request should be groupable in Grapheus."""
+    import importlib
+
+    reposition = importlib.import_module("spoke.positioning.reposition")
+
+    image = Image.new("RGB", (100, 100), "white")
+    seen_ids = []
+
+    class FakeResponse:
+        def __init__(self, content):
+            self._content = content
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": self._content}}]}
+
+    def fake_post(_url, *, headers, **_kwargs):
+        seen_ids.append(headers["X-Spoke-Utterance-ID"])
+        if headers["X-Spoke-Step"] == "gridpoint":
+            return FakeResponse("A3")
+        return FakeResponse(
+            '{"x":"KEEP","y":"KEEP","width":"KEEP","height":"KEEP",'
+            '"done":true,"justification":"already upper right"}'
+        )
+
+    monkeypatch.setattr(reposition.requests, "post", fake_post)
+    monkeypatch.setattr(reposition, "_draw_grid_points", lambda img: img)
+    monkeypatch.setattr(reposition, "_draw_overlay_outline", lambda img, _overlay: img)
+    monkeypatch.setattr(reposition, "_encode_image", lambda _img: "image")
+
+    result = reposition.reposition_gridpoint_iterative(
+        "put yourself in the upper right",
+        image,
+        current_overlay={"x": 0.3, "y": 0.3, "width": 0.4, "height": 0.4},
+        screen_w=100,
+        screen_h=100,
+    )
+
+    assert len(seen_ids) == 2
+    assert seen_ids[0] == seen_ids[1]
+    assert result["_positioning_utterance_id"] == seen_ids[0]
 
 
 def test_parse_axis_audit_response_keeps_and_clamps_dimensions():
@@ -693,7 +741,7 @@ def test_positioning_applies_semantic_bounds_to_real_command_overlay_when_compos
     }
 
     with patch.object(smoke_hook, "_get_main_screen_frame", return_value=Frame()), \
-         patch.object(smoke_hook, "_schedule_command_overlay_reopen", side_effect=lambda fn: fn()), \
+         patch.object(smoke_hook, "_schedule_command_overlay_reopen", side_effect=lambda fn, delay_s: fn()), \
          patch.object(smoke_hook, "_show_smoke_rect") as show_smoke:
         _run_finish_on_main(app, result)
 
@@ -754,7 +802,7 @@ def test_positioning_dismisses_old_command_overlay_before_materializing_new_boun
     )
 
     with patch.object(smoke_hook, "_get_main_screen_frame", return_value=Frame()), \
-         patch.object(smoke_hook, "_schedule_command_overlay_reopen", side_effect=lambda fn: fn()), \
+         patch.object(smoke_hook, "_schedule_command_overlay_reopen", side_effect=lambda fn, delay_s: fn()), \
          patch.object(smoke_hook, "_show_smoke_rect"):
         _run_finish_on_main(
             app,
@@ -772,6 +820,57 @@ def test_positioning_dismisses_old_command_overlay_before_materializing_new_boun
     assert events[0] == "dismiss"
     assert events[1].startswith("apply:materialize:")
     assert events[2] == "show"
+
+
+def test_positioning_waits_for_command_overlay_dismiss_before_reopening():
+    """The semantic move should not reopen before the optical dismiss can finish."""
+    import spoke.positioning.smoke_hook as smoke_hook
+
+    from spoke.command_overlay import (
+        _OPTICAL_MATERIALIZATION_DISMISS_TOTAL_S,
+        _SEMANTIC_POSITIONING_REOPEN_PAD_S,
+    )
+
+    class CommandOverlay:
+        def __init__(self):
+            self._fullscreen_compositor = MagicMock()
+            self.cancel_dismiss = MagicMock()
+            self.show = MagicMock()
+
+        def apply_semantic_positioning_request(self, request):
+            return True
+
+        def semantic_positioning_reopen_delay_s(self):
+            return (
+                _OPTICAL_MATERIALIZATION_DISMISS_TOTAL_S
+                + _SEMANTIC_POSITIONING_REOPEN_PAD_S
+            )
+
+    app = MagicMock()
+    app._positioning_field_request = None
+    command_overlay = CommandOverlay()
+    scheduled = []
+
+    with patch.object(
+        smoke_hook,
+        "_schedule_command_overlay_reopen",
+        side_effect=lambda callback, delay_s: scheduled.append(delay_s),
+    ):
+        assert smoke_hook._present_request_on_command_overlay(
+            app,
+            command_overlay,
+            MagicMock(),
+            "positioning diagnostics",
+            MagicMock(),
+        )
+
+    assert scheduled == [
+        pytest.approx(
+            _OPTICAL_MATERIALIZATION_DISMISS_TOTAL_S
+            + _SEMANTIC_POSITIONING_REOPEN_PAD_S
+        )
+    ]
+    command_overlay.show.assert_not_called()
 
 
 def test_positioning_hook_reemits_stored_request_when_command_overlay_shows():

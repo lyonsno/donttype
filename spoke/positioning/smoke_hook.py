@@ -10,6 +10,7 @@ Usage: monkey-patch SpokeApp._command_transcribe_worker with
 from __future__ import annotations
 
 import logging
+import math
 import numbers
 import os
 import threading
@@ -124,12 +125,14 @@ def positioning_transcribe_worker(app, wav_bytes: bytes, token: int) -> None:
             return
         pipeline_fn = reposition_gridpoint_iterative
 
+        positioning_utterance_id = result.get("_positioning_utterance_id")
         screenshot_b64 = result.pop("_screenshot_b64", None)
         if screenshot_b64 and _positioning_bearing_enabled():
             def _update_bearing_bg():
                 try:
                     new_bearing = update_bearing(
                         screenshot_b64, text, result, bearing, scr_w, scr_h,
+                        utterance_id=positioning_utterance_id,
                     )
                     app._positioning_bearing = new_bearing
                     logger.info("Bearing updated: %s", new_bearing[:200])
@@ -173,12 +176,14 @@ def positioning_transcribe_worker(app, wav_bytes: bytes, token: int) -> None:
             return
         pipeline_fn = reposition_gridpoint
 
+        positioning_utterance_id = result.get("_positioning_utterance_id")
         screenshot_b64 = result.pop("_screenshot_b64", None)
         if screenshot_b64 and _positioning_bearing_enabled():
             def _update_bearing_bg():
                 try:
                     new_bearing = update_bearing(
                         screenshot_b64, text, result, bearing, scr_w, scr_h,
+                        utterance_id=positioning_utterance_id,
                     )
                     app._positioning_bearing = new_bearing
                     logger.info("Bearing updated: %s", new_bearing[:200])
@@ -223,12 +228,14 @@ def positioning_transcribe_worker(app, wav_bytes: bytes, token: int) -> None:
             return
         pipeline_fn = reposition_centersize
 
+        positioning_utterance_id = result.get("_positioning_utterance_id")
         screenshot_b64 = result.pop("_screenshot_b64", None)
         if screenshot_b64 and _positioning_bearing_enabled():
             def _update_bearing_bg():
                 try:
                     new_bearing = update_bearing(
                         screenshot_b64, text, result, bearing, scr_w, scr_h,
+                        utterance_id=positioning_utterance_id,
                     )
                     app._positioning_bearing = new_bearing
                     logger.info("Bearing updated: %s", new_bearing[:200])
@@ -272,12 +279,14 @@ def positioning_transcribe_worker(app, wav_bytes: bytes, token: int) -> None:
         pipeline_fn = reposition_bbox
 
         # Fire background bearing update — runs after overlay moves
+        positioning_utterance_id = result.get("_positioning_utterance_id")
         screenshot_b64 = result.pop("_screenshot_b64", None)
         if screenshot_b64 and _positioning_bearing_enabled():
             def _update_bearing_bg():
                 try:
                     new_bearing = update_bearing(
                         screenshot_b64, text, result, bearing, scr_w, scr_h,
+                        utterance_id=positioning_utterance_id,
                     )
                     app._positioning_bearing = new_bearing
                     logger.info("Bearing updated: %s", new_bearing[:200])
@@ -344,7 +353,9 @@ def positioning_transcribe_worker(app, wav_bytes: bytes, token: int) -> None:
 
 
 _POSITIONING_CALLER_ID = "semantic_positioning"
-_POSITIONING_REOPEN_DELAY_S = 0.16
+# Conservative fallback for command-overlay implementations that cannot report
+# their own dismiss duration. The current optical close path is just under 2s.
+_POSITIONING_REOPEN_FALLBACK_DELAY_S = 2.0
 _DISPLAY_LOCAL_POINT_KEYS = (
     "content_width_points",
     "content_height_points",
@@ -633,13 +644,35 @@ def _apply_request_to_command_overlay(
         return False
 
 
-def _schedule_command_overlay_reopen(callback) -> None:
+def _command_overlay_reopen_delay_s(command_overlay) -> float:
+    delay_provider = _explicit_attr(
+        command_overlay,
+        "semantic_positioning_reopen_delay_s",
+        None,
+    )
+    if callable(delay_provider):
+        try:
+            delay = float(delay_provider())
+            if math.isfinite(delay) and delay >= 0.0:
+                return delay
+        except Exception:
+            logger.debug("Failed to read command overlay reopen delay", exc_info=True)
+    return _POSITIONING_REOPEN_FALLBACK_DELAY_S
+
+
+def _schedule_command_overlay_reopen(callback, delay_s: float) -> None:
     from PyObjCTools import AppHelper
 
     def _run_on_main():
         AppHelper.callAfter(callback)
 
-    threading.Timer(_POSITIONING_REOPEN_DELAY_S, _run_on_main).start()
+    try:
+        delay = float(delay_s)
+    except (TypeError, ValueError):
+        delay = _POSITIONING_REOPEN_FALLBACK_DELAY_S
+    if not math.isfinite(delay) or delay < 0.0:
+        delay = _POSITIONING_REOPEN_FALLBACK_DELAY_S
+    threading.Timer(delay, _run_on_main).start()
 
 
 def _present_request_on_command_overlay(
@@ -677,7 +710,9 @@ def _present_request_on_command_overlay(
         if applied:
             _push_request_to_command_overlay_compositor(command_overlay, request, screen_frame)
 
-    _schedule_command_overlay_reopen(_materialize_at_new_bounds)
+    reopen_delay_s = _command_overlay_reopen_delay_s(command_overlay)
+    logger.info("Scheduling command overlay reposition reopen in %.2fs", reopen_delay_s)
+    _schedule_command_overlay_reopen(_materialize_at_new_bounds, reopen_delay_s)
     return True
 
 

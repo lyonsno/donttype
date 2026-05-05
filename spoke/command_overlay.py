@@ -190,6 +190,7 @@ _DISMISS_DURATION_S = 0.2 * _PRESSURE_SLIT_SMOKE_TIME_SCALE
 _DISMISS_GROW_S = 0.06 * _PRESSURE_SLIT_SMOKE_TIME_SCALE
 _DISMISS_SHRINK_S = _DISMISS_DURATION_S - _DISMISS_GROW_S
 _DISMISS_ANIM_FPS = 60.0
+_SEMANTIC_POSITIONING_REOPEN_PAD_S = 1.0 / _DISMISS_ANIM_FPS
 _DISMISS_GROW_SCALE = 1.018
 _DISMISS_END_SCALE = 0.94
 
@@ -2455,6 +2456,19 @@ class CommandOverlay(NSObject):
             self._window.orderOut_(None)
             self._visible = False
             self._cancel_pulse()
+
+    def semantic_positioning_reopen_delay_s(self) -> float:
+        """Return how long semantic repositioning should wait before reopening."""
+        if getattr(self, "_fullscreen_compositor", None) is None:
+            return _DISMISS_DURATION_S + _SEMANTIC_POSITIONING_REOPEN_PAD_S
+        try:
+            shell_config = self._display_local_optical_shell_config()
+        except Exception:
+            logger.debug("Failed to read command overlay shell config for reopen delay", exc_info=True)
+            shell_config = None
+        if shell_config is None:
+            return _FADE_OUT_S + _SEMANTIC_POSITIONING_REOPEN_PAD_S
+        return _OPTICAL_MATERIALIZATION_DISMISS_TOTAL_S + _SEMANTIC_POSITIONING_REOPEN_PAD_S
 
     def hide(self) -> None:
         """Fade out without competing pulse work during the dismiss animation."""

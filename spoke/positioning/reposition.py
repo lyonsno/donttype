@@ -11,11 +11,15 @@ Returns a CGRect-compatible dict for the overlay's new position.
 from __future__ import annotations
 
 import base64
+import contextlib
+import contextvars
+import functools
 import io
 import json
 import os
 import re
 import time
+import uuid
 from pathlib import Path
 
 import requests
@@ -26,6 +30,10 @@ from .grid_overlay import draw_grid, ROW_LABELS, COLS, ROWS
 # Default grid for positioning
 POS_ROWS = 6
 POS_COLS = 6
+_POSITIONING_UTTERANCE_ID = contextvars.ContextVar(
+    "spoke_positioning_utterance_id",
+    default=None,
+)
 
 INTENT_SYSTEM = (
     "Your only job is to classify overlay positioning requests.\n\n"
@@ -116,17 +124,43 @@ def _get_api_key():
     return os.environ.get("OMLX_SERVER_API_KEY", "1234")
 
 
+def _new_positioning_utterance_id() -> str:
+    return f"positioning-{uuid.uuid4().hex[:12]}"
+
+
+@contextlib.contextmanager
+def positioning_utterance_scope(utterance_id: str | int | None = None):
+    """Group all positioning model calls from one user action for Grapheus."""
+    value = str(utterance_id) if utterance_id is not None else _new_positioning_utterance_id()
+    token = _POSITIONING_UTTERANCE_ID.set(value)
+    try:
+        yield value
+    finally:
+        _POSITIONING_UTTERANCE_ID.reset(token)
+
+
+def _current_positioning_utterance_id(utterance_id: str | int | None = None) -> str:
+    if utterance_id is not None:
+        return str(utterance_id)
+    current = _POSITIONING_UTTERANCE_ID.get()
+    if current:
+        return str(current)
+    return _new_positioning_utterance_id()
+
+
 def _api_headers(
     step: str = "positioning",
     *,
     mode: str | None = None,
     iteration: int | None = None,
+    utterance_id: str | int | None = None,
 ) -> dict[str, str]:
     """Standard headers for positioning API calls, including Grapheus X-Spoke-* metadata."""
     headers = {
         "Authorization": f"Bearer {_get_api_key()}",
         "Content-Type": "application/json",
         "X-Spoke-Pathway": "positioning",
+        "X-Spoke-Utterance-ID": _current_positioning_utterance_id(utterance_id),
         "X-Spoke-Step": step,
     }
     if mode:
@@ -134,6 +168,25 @@ def _api_headers(
     if iteration is not None:
         headers["X-Spoke-Positioning-Iteration"] = str(iteration)
     return headers
+
+
+def _with_positioning_utterance_scope(fn):
+    """Ensure top-level positioning pipelines share one Grapheus utterance id."""
+    @functools.wraps(fn)
+    def wrapped(utterance, *args, **kwargs):
+        active_id = _POSITIONING_UTTERANCE_ID.get()
+        if active_id:
+            result = fn(utterance, *args, **kwargs)
+            utterance_id = str(active_id)
+        else:
+            with positioning_utterance_scope() as utterance_id:
+                result = fn(utterance, *args, **kwargs)
+        if isinstance(result, dict):
+            result.setdefault("_positioning_utterance_id", utterance_id)
+        return result
+
+    wrapped._last_debug = getattr(fn, "_last_debug", [])
+    return wrapped
 
 
 def _detect_thinking_enabled() -> bool:
@@ -722,6 +775,8 @@ def update_bearing(
     previous_bearing: str | None,
     screen_w: int,
     screen_h: int,
+    *,
+    utterance_id: str | int | None = None,
 ) -> str:
     """Background call: update the operator bearing after repositioning.
 
@@ -755,7 +810,7 @@ def update_bearing(
 
     resp = requests.post(
         _get_api_url(),
-        headers=_api_headers("bearing"),
+        headers=_api_headers("bearing", utterance_id=utterance_id),
         json={
             "model": os.environ.get("SPOKE_VLM_MODEL", "qwen3.6-35b-a3b-oq8"),
             "messages": [
@@ -1865,3 +1920,13 @@ def reposition(utterance: str, screenshot: Image.Image) -> dict | None:
             reposition._last_debug.append("All cells YES → no empty space for overlay")
 
     return rect
+
+
+reposition_centersize = _with_positioning_utterance_scope(reposition_centersize)
+reposition_gridpoint = _with_positioning_utterance_scope(reposition_gridpoint)
+reposition_gridpoint_iterative = _with_positioning_utterance_scope(
+    reposition_gridpoint_iterative
+)
+reposition_bbox = _with_positioning_utterance_scope(reposition_bbox)
+reposition_twostep = _with_positioning_utterance_scope(reposition_twostep)
+reposition = _with_positioning_utterance_scope(reposition)
