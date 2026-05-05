@@ -204,6 +204,17 @@ user's shell profile. If the assistant menu appears but is empty ("couldn't
 reach the model"), the most likely cause is the model server not running or the
 API key not reaching the app process.
 
+### Grapheus headers (`X-Spoke-*`)
+
+Every LLM call through Grapheus must send these headers:
+
+- `X-Spoke-Pathway`: which pathway is making the call (e.g. `command`, `narrator`, `positioning`)
+- `X-Spoke-Utterance-ID`: a stable ID tying all calls from one user action together
+
+Without `Utterance-ID`, Grapheus cannot group calls into logical requests.
+`X-Spoke-Turn` (round number) and `X-Spoke-Step` (pipeline stage) are
+optional but recommended for multi-round or multi-step pathways.
+
 When preparing a new worktree or smoke surface, do not assume the assistant
 will work without checking. The command pathway is always enabled but the model
 server and API key must be reachable from the launched process.
