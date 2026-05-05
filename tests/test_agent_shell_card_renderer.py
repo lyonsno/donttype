@@ -85,7 +85,7 @@ def test_card_renderer_consumes_primitives_without_reinterpreting_display_contra
     assert selected["material"]["prominence"] == "selected"
 
 
-def test_card_renderer_places_cards_as_sibling_surfaces_outside_transcript_body():
+def test_card_renderer_places_sibling_surfaces_inside_visible_content_bounds():
     from spoke.agent_shell_card_renderer import build_agent_shell_card_render_payload
 
     primitives = [_primitive(f"thread-{index}", priority=index) for index in range(7)]
@@ -110,16 +110,17 @@ def test_card_renderer_places_cards_as_sibling_surfaces_outside_transcript_body(
         "width": 336.0,
         "height": 130.0,
     }
-    outside_cards = 0
     for surface in payload["cards"]:
         frame = surface["frame"]
-        if frame["y"] + frame["height"] <= 0.0 or frame["x"] >= 360.0:
-            outside_cards += 1
+        assert 0.0 <= frame["x"] <= 360.0 - frame["width"]
+        assert 0.0 <= frame["y"] <= 154.0 - frame["height"]
         assert surface["clip"] is True
         assert surface["movable"] is True
         assert surface["surface_attachment"] == "sibling"
         assert surface["material"]["style"] in {"thread_card", "quiet_chip"}
-    assert outside_cards == len(payload["cards"])
+    selected = payload["cards"][-1]
+    assert selected["frame"]["x"] > payload["cards"][0]["frame"]["x"]
+    assert selected["frame"]["y"] > payload["cards"][0]["frame"]["y"]
 
 
 def test_card_renderer_builds_optical_field_requests_from_rendered_cards():

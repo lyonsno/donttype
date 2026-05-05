@@ -151,26 +151,52 @@ def _frame_for_index(
     content_height: float,
 ) -> dict[str, float]:
     min_width, min_height, preferred_width, preferred_height = _preferred_size(primitive)
-    usable_width = max(min_width, content_width - 2 * _CARD_MARGIN_POINTS)
+    usable_width = max(1.0, content_width - 2 * _CARD_MARGIN_POINTS)
+    usable_height = max(1.0, content_height - 2 * _CARD_MARGIN_POINTS)
     total_gap = _CARD_GAP_POINTS * max(0, count - 1)
-    equal_width = (usable_width - total_gap) / max(1, count)
+    equal_width = max(1.0, (usable_width - total_gap) / max(1, count))
     anchor = _anchor(primitive)
     if anchor == "right":
-        width = max(
-            min_width,
-            min(_CARD_MAX_WIDTH_POINTS, preferred_width, max(min_width, content_width * 0.46)),
+        max_width = min(
+            usable_width,
+            max(_CARD_MIN_WIDTH_POINTS, content_width * 0.78),
         )
-        height_budget = max(min_height, content_height * 0.62)
+        width = max(
+            1.0,
+            min(
+                _CARD_MAX_WIDTH_POINTS,
+                preferred_width,
+                max_width,
+            ),
+        )
+        height_budget = min(usable_height, max(min_height, content_height * 0.62))
     else:
-        width = max(min_width, min(_CARD_MAX_WIDTH_POINTS, preferred_width, equal_width))
-        height_budget = max(min_height, content_height * 0.42)
-    height = max(min_height, min(preferred_height, height_budget))
+        width = max(
+            1.0,
+            min(
+                _CARD_MAX_WIDTH_POINTS,
+                preferred_width,
+                max(_CARD_SLOT_MIN_WIDTH_POINTS, equal_width),
+                usable_width,
+            ),
+        )
+        height_budget = min(usable_height, max(min_height, content_height * 0.42))
+    height = max(1.0, min(preferred_height, height_budget))
     if anchor == "right":
-        x = content_width + _CARD_MARGIN_POINTS
-        y = max(_CARD_MARGIN_POINTS, (content_height * 0.5) - (height * 0.5))
+        x = min(
+            max(_CARD_MARGIN_POINTS, content_width - width - _CARD_MARGIN_POINTS),
+            max(0.0, content_width - width),
+        )
+        y = min(
+            max(_CARD_MARGIN_POINTS, (content_height * 0.5) - (height * 0.5)),
+            max(0.0, content_height - height),
+        )
     else:
-        x = _CARD_MARGIN_POINTS + index * (width + _CARD_GAP_POINTS)
-        y = -height - _CARD_MARGIN_POINTS
+        x = min(
+            _CARD_MARGIN_POINTS + index * (width + _CARD_GAP_POINTS),
+            max(0.0, content_width - width),
+        )
+        y = min(_CARD_MARGIN_POINTS, max(0.0, content_height - height))
     return {
         "x": round(x, 3),
         "y": round(y, 3),
