@@ -13,7 +13,7 @@ from types import MappingProxyType
 from typing import Any, Literal, Mapping
 
 
-OpticalFieldState = Literal["rest", "materialize", "dismiss"]
+OpticalFieldState = Literal["rest", "materialize", "resize", "recenter", "dismiss", "hidden"]
 OpticalFieldDisturbanceMode = Literal["persistent", "ephemeral"]
 
 
@@ -99,6 +99,9 @@ class OpticalFieldRequest:
     disturbances: tuple[OpticalFieldDisturbance, ...] = ()
     visible: bool = True
     z_index: int = 0
+    source_epoch: int | None = None
+    display_epoch: int | None = None
+    provisional: bool = False
 
     def __post_init__(self) -> None:
         if not self.caller_id:
@@ -106,6 +109,38 @@ class OpticalFieldRequest:
         if not self.role:
             raise ValueError("role must be non-empty")
         object.__setattr__(self, "disturbances", tuple(self.disturbances))
+
+
+@dataclass(frozen=True)
+class OpticalFieldTransitionState:
+    """Primitive-owned geometry custody for one caller's latest accepted target."""
+
+    target_request: OpticalFieldRequest
+    previous_bounds: OpticalFieldBounds
+    presented_bounds: OpticalFieldBounds
+    target_bounds: OpticalFieldBounds
+    pending_request: OpticalFieldRequest | None = None
+
+    @property
+    def caller_id(self) -> str:
+        return self.target_request.caller_id
+
+    @property
+    def source_epoch(self) -> int | None:
+        return self.target_request.source_epoch
+
+    @property
+    def display_epoch(self) -> int | None:
+        return self.target_request.display_epoch
+
+
+@dataclass(frozen=True)
+class OpticalFieldMailboxResult:
+    """Acceptance result for a desired-state geometry target."""
+
+    accepted: bool
+    reason: str
+    state: OpticalFieldTransitionState | None = None
 
 
 _BASE_PROFILES: dict[str, dict[str, float | str | bool]] = {
@@ -182,7 +217,50 @@ def _float_param(params: Mapping[str, Any], key: str) -> float:
     return float(params[key])
 
 
-def compile_placeholder_shell_config(request: OpticalFieldRequest) -> dict[str, Any]:
+def _bounds_metadata(bounds: OpticalFieldBounds) -> tuple[float, float, float, float]:
+    return (float(bounds.x), float(bounds.y), float(bounds.width), float(bounds.height))
+
+
+def _with_transition_metadata(
+    optical_field: dict[str, Any],
+    request: OpticalFieldRequest,
+    transition: OpticalFieldTransitionState | None,
+) -> dict[str, Any]:
+    if transition is None:
+        return optical_field
+
+    carries_freshness = (
+        request.source_epoch is not None
+        or request.display_epoch is not None
+        or request.provisional
+    )
+    carries_geometry_custody = (
+        request.state in {"resize", "recenter", "hidden"}
+        or transition.previous_bounds != transition.target_bounds
+        or transition.presented_bounds != transition.target_bounds
+    )
+    if not carries_freshness and not carries_geometry_custody:
+        return optical_field
+
+    optical_field = dict(optical_field)
+    transition_payload: dict[str, Any] = {
+        "from_bounds": _bounds_metadata(transition.previous_bounds),
+        "presented_bounds": _bounds_metadata(transition.presented_bounds),
+        "target_bounds": _bounds_metadata(transition.target_bounds),
+        "provisional": bool(request.provisional),
+    }
+    if request.source_epoch is not None:
+        transition_payload["source_epoch"] = int(request.source_epoch)
+    if request.display_epoch is not None:
+        transition_payload["display_epoch"] = int(request.display_epoch)
+    optical_field["transition"] = transition_payload
+    return optical_field
+
+
+def compile_placeholder_shell_config(
+    request: OpticalFieldRequest,
+    transition: OpticalFieldTransitionState | None = None,
+) -> dict[str, Any]:
     """Compile one contract request into the current legacy shell-config shape."""
 
     slot_name = _slot_name_for_state(request.state)
@@ -195,6 +273,20 @@ def compile_placeholder_shell_config(request: OpticalFieldRequest) -> dict[str, 
         bounds.width * 0.5,
     )
     exterior_mix = scale * _float_param(params, "exterior_mix_frac")
+
+    optical_field = _with_transition_metadata(
+        {
+            "caller_id": request.caller_id,
+            "profile": request.profile.base,
+            "state": request.state,
+            "slot": slot_name,
+            "disturbances": tuple(
+                disturbance.disturbance_id for disturbance in request.disturbances
+            ),
+        },
+        request,
+        transition,
+    )
 
     return {
         "enabled": True,
@@ -214,15 +306,7 @@ def compile_placeholder_shell_config(request: OpticalFieldRequest) -> dict[str, 
         "bleed_zone_frac": _float_param(params, "bleed_zone_frac"),
         "exterior_mix_width_points": exterior_mix,
         "mip_blur_strength": _float_param(params, "mip_blur_strength"),
-        "optical_field": {
-            "caller_id": request.caller_id,
-            "profile": request.profile.base,
-            "state": request.state,
-            "slot": slot_name,
-            "disturbances": tuple(
-                disturbance.disturbance_id for disturbance in request.disturbances
-            ),
-        },
+        "optical_field": optical_field,
     }
 
 
@@ -230,23 +314,111 @@ class OpticalFieldPlaceholderBackend:
     """In-memory placeholder backend for consumers targeting the new contract."""
 
     def __init__(self) -> None:
-        self._requests: dict[str, OpticalFieldRequest] = {}
+        self._transitions: dict[str, OpticalFieldTransitionState] = {}
 
-    def upsert(self, request: OpticalFieldRequest) -> None:
-        self._requests[request.caller_id] = request
+    @staticmethod
+    def _is_newer_epoch(
+        request: OpticalFieldRequest,
+        current: OpticalFieldTransitionState,
+    ) -> bool:
+        for key in ("display_epoch", "source_epoch"):
+            incoming = getattr(request, key)
+            existing = getattr(current, key)
+            if incoming is not None and (existing is None or incoming > existing):
+                return True
+        return False
+
+    @staticmethod
+    def _rejection_reason(
+        request: OpticalFieldRequest,
+        current: OpticalFieldTransitionState | None,
+    ) -> str | None:
+        if current is None:
+            return None
+        if (
+            request.display_epoch is not None
+            and current.display_epoch is not None
+            and request.display_epoch < current.display_epoch
+        ):
+            return "stale_display_epoch"
+        if (
+            request.source_epoch is not None
+            and current.source_epoch is not None
+            and request.source_epoch < current.source_epoch
+        ):
+            return "stale_source_epoch"
+        if (
+            request.provisional
+            and not current.target_request.provisional
+            and not OpticalFieldPlaceholderBackend._is_newer_epoch(request, current)
+        ):
+            return "stale_provisional_after_final"
+        return None
+
+    def upsert(
+        self,
+        request: OpticalFieldRequest,
+        *,
+        presented_bounds: OpticalFieldBounds | None = None,
+    ) -> OpticalFieldMailboxResult:
+        current = self._transitions.get(request.caller_id)
+        rejection_reason = self._rejection_reason(request, current)
+        if rejection_reason is not None:
+            return OpticalFieldMailboxResult(
+                accepted=False,
+                reason=rejection_reason,
+                state=current,
+            )
+
+        if presented_bounds is not None:
+            previous_bounds = presented_bounds
+        elif current is not None:
+            previous_bounds = current.presented_bounds
+        else:
+            previous_bounds = request.bounds
+
+        transition = OpticalFieldTransitionState(
+            target_request=request,
+            previous_bounds=previous_bounds,
+            presented_bounds=previous_bounds,
+            target_bounds=request.bounds,
+            pending_request=None,
+        )
+        self._transitions[request.caller_id] = transition
+        return OpticalFieldMailboxResult(
+            accepted=True,
+            reason="accepted",
+            state=transition,
+        )
 
     def remove(self, caller_id: str) -> bool:
-        return self._requests.pop(caller_id, None) is not None
+        return self._transitions.pop(caller_id, None) is not None
 
     def clear(self) -> None:
-        self._requests.clear()
+        self._transitions.clear()
 
     def requests(self) -> tuple[OpticalFieldRequest, ...]:
-        return tuple(self._requests.values())
+        return tuple(transition.target_request for transition in self._transitions.values())
+
+    def transition_for(self, caller_id: str) -> OpticalFieldTransitionState | None:
+        return self._transitions.get(caller_id)
+
+    def sample_presented_bounds(self, caller_id: str, bounds: OpticalFieldBounds) -> bool:
+        current = self._transitions.get(caller_id)
+        if current is None:
+            return False
+        self._transitions[caller_id] = OpticalFieldTransitionState(
+            target_request=current.target_request,
+            previous_bounds=current.previous_bounds,
+            presented_bounds=bounds,
+            target_bounds=current.target_bounds,
+            pending_request=current.pending_request,
+        )
+        return True
 
     def compile_shell_configs(self) -> tuple[dict[str, Any], ...]:
         return tuple(
-            compile_placeholder_shell_config(request)
-            for request in self._requests.values()
-            if request.visible
+            compile_placeholder_shell_config(transition.target_request, transition)
+            for transition in self._transitions.values()
+            if transition.target_request.visible and transition.target_request.state != "hidden"
         )
