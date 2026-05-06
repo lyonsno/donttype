@@ -7,13 +7,13 @@ backend compiles those requests into today's legacy shell-config dictionaries.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 import math
 from types import MappingProxyType
 from typing import Any, Literal, Mapping
 
 
-OpticalFieldState = Literal["rest", "materialize", "dismiss"]
+OpticalFieldState = Literal["hidden", "rest", "materialize", "dismiss", "resize"]
 OpticalFieldDisturbanceMode = Literal["persistent", "ephemeral"]
 
 
@@ -41,6 +41,14 @@ class OpticalFieldBounds:
     @property
     def min_dimension(self) -> float:
         return min(self.width, self.height)
+
+    def as_metadata(self) -> dict[str, float]:
+        return {
+            "x": float(self.x),
+            "y": float(self.y),
+            "width": float(self.width),
+            "height": float(self.height),
+        }
 
 
 @dataclass(frozen=True)
@@ -96,6 +104,7 @@ class OpticalFieldRequest:
     role: str
     state: OpticalFieldState = "rest"
     progress: float = 1.0
+    previous_bounds: OpticalFieldBounds | None = None
     profile: OpticalFieldProfileRef = field(default_factory=OpticalFieldProfileRef)
     disturbances: tuple[OpticalFieldDisturbance, ...] = ()
     visible: bool = True
@@ -109,6 +118,27 @@ class OpticalFieldRequest:
         if not 0.0 <= self.progress <= 1.0:
             raise ValueError("optical field progress must be between 0 and 1")
         object.__setattr__(self, "disturbances", tuple(self.disturbances))
+
+    def as_materializing(self) -> OpticalFieldRequest:
+        return replace(self, state="materialize", visible=True, previous_bounds=None)
+
+    def as_resting(self) -> OpticalFieldRequest:
+        return replace(self, state="rest", visible=True, previous_bounds=None)
+
+    def as_dismissing(self) -> OpticalFieldRequest:
+        return replace(self, state="dismiss", visible=True, previous_bounds=None)
+
+    def as_hidden(self) -> OpticalFieldRequest:
+        return replace(self, state="hidden", visible=False, previous_bounds=None)
+
+    def resize_to(self, bounds: OpticalFieldBounds) -> OpticalFieldRequest:
+        return replace(
+            self,
+            bounds=bounds,
+            previous_bounds=self.bounds,
+            state="resize",
+            visible=True,
+        )
 
 
 _BASE_PROFILES: dict[str, dict[str, float | str | bool]] = {
@@ -164,7 +194,7 @@ def available_optical_field_profiles() -> tuple[str, ...]:
 
 
 def _slot_name_for_state(state: OpticalFieldState) -> str:
-    if state in {"materialize", "dismiss"}:
+    if state in {"materialize", "dismiss", "resize"}:
         return state
     return "rest"
 
@@ -253,6 +283,12 @@ def _base_shell_config(
             "state": request.state,
             "slot": slot_name,
             "progress": float(request.progress),
+            "bounds": bounds.as_metadata(),
+            "previous_bounds": (
+                request.previous_bounds.as_metadata()
+                if request.previous_bounds is not None
+                else None
+            ),
             "disturbances": tuple(
                 disturbance.disturbance_id for disturbance in request.disturbances
             ),
@@ -287,6 +323,12 @@ def _with_optical_field_sidecar(
             "state": request.state,
             "slot": slot_name,
             "progress": float(request.progress),
+            "bounds": request.bounds.as_metadata(),
+            "previous_bounds": (
+                request.previous_bounds.as_metadata()
+                if request.previous_bounds is not None
+                else None
+            ),
             "sidecar": sidecar,
             "disturbances": tuple(
                 disturbance.disturbance_id for disturbance in request.disturbances
@@ -475,6 +517,8 @@ def _dismiss_radial_pressure_slit_config(
 def compile_optical_field_shell_configs(request: OpticalFieldRequest) -> tuple[dict[str, Any], ...]:
     """Compile one request into one or more compositor shell configs."""
 
+    if request.state == "hidden" or not request.visible:
+        return ()
     slot_name = _slot_name_for_state(request.state)
     params = _merged_profile_params(request.profile, slot_name)
 
@@ -521,8 +565,7 @@ class OpticalFieldBackend:
     def compile_shell_configs(self) -> tuple[dict[str, Any], ...]:
         configs: list[dict[str, Any]] = []
         for request in self._requests.values():
-            if request.visible:
-                configs.extend(compile_optical_field_shell_configs(request))
+            configs.extend(compile_optical_field_shell_configs(request))
         return tuple(configs)
 
 
