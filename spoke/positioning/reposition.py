@@ -1389,6 +1389,60 @@ def _candidate_from_center(
     }
 
 
+def _field_edge_margin_px(*, screen_w: int, screen_h: int) -> int:
+    """Small renderer hygiene inset for the optical field's screen-edge rim."""
+
+    raw = os.environ.get("SPOKE_POSITIONING_FIELD_EDGE_MARGIN_PX")
+    if raw is None:
+        margin = 16 if min(screen_w, screen_h) >= 400 else 0
+    else:
+        try:
+            margin = int(float(raw))
+        except (TypeError, ValueError):
+            margin = 16 if min(screen_w, screen_h) >= 400 else 0
+    max_margin = max(0, min(screen_w, screen_h) // 2 - 1)
+    return max(0, min(max_margin, margin))
+
+
+def _sanitize_candidate_for_field_margin(
+    candidate_overlay: dict,
+    *,
+    screen_w: int,
+    screen_h: int,
+) -> dict:
+    """Crop presented positioning geometry against an inset screen-edge band."""
+
+    margin = _field_edge_margin_px(screen_w=screen_w, screen_h=screen_h)
+    if margin <= 0:
+        return dict(candidate_overlay)
+
+    x_px = int(candidate_overlay["x"] * screen_w)
+    y_px = int(candidate_overlay["y"] * screen_h)
+    w_px = max(1, int(candidate_overlay["width"] * screen_w))
+    h_px = max(1, int(candidate_overlay["height"] * screen_h))
+
+    left = max(margin, x_px)
+    top = max(margin, y_px)
+    right = min(screen_w - margin, x_px + w_px)
+    bottom = min(screen_h - margin, y_px + h_px)
+
+    if right <= left:
+        left = max(margin, min(screen_w - margin - 1, x_px))
+        right = min(screen_w - margin, left + 1)
+    if bottom <= top:
+        top = max(margin, min(screen_h - margin - 1, y_px))
+        bottom = min(screen_h - margin, top + 1)
+
+    sanitized = dict(candidate_overlay)
+    sanitized.update({
+        "x": left / screen_w,
+        "y": top / screen_h,
+        "width": max(1, right - left) / screen_w,
+        "height": max(1, bottom - top) / screen_h,
+    })
+    return sanitized
+
+
 def _apply_split_audit(
     candidate_overlay: dict,
     center_audit: dict[str, int | str],
@@ -1505,10 +1559,16 @@ def reposition_gridpoint(
     bx = max(0, min(screen_w - cur_w, cx - cur_w // 2))
     by = max(0, min(screen_h - cur_h, cy - cur_h // 2))
     intermediate = {
-        "x": bx / screen_w,
-        "y": by / screen_h,
-        "width": cur_w / screen_w,
-        "height": cur_h / screen_h,
+        **_sanitize_candidate_for_field_margin(
+            {
+                "x": bx / screen_w,
+                "y": by / screen_h,
+                "width": cur_w / screen_w,
+                "height": cur_h / screen_h,
+            },
+            screen_w=screen_w,
+            screen_h=screen_h,
+        ),
         "content_desc": utterance,
         "utterance": utterance,
         "elapsed_s": round(time.time() - t0, 2),
@@ -1548,10 +1608,16 @@ def reposition_gridpoint(
     _report()
 
     return {
-        "x": bx / screen_w,
-        "y": by / screen_h,
-        "width": new_w / screen_w,
-        "height": new_h / screen_h,
+        **_sanitize_candidate_for_field_margin(
+            {
+                "x": bx / screen_w,
+                "y": by / screen_h,
+                "width": new_w / screen_w,
+                "height": new_h / screen_h,
+            },
+            screen_w=screen_w,
+            screen_h=screen_h,
+        ),
         "content_desc": utterance,
         "utterance": utterance,
         "elapsed_s": elapsed,
@@ -1744,7 +1810,11 @@ def reposition_gridpoint_iterative(
             break
         candidate = updated
         intermediate = {
-            **candidate,
+            **_sanitize_candidate_for_field_margin(
+                candidate,
+                screen_w=screen_w,
+                screen_h=screen_h,
+            ),
             "content_desc": utterance,
             "utterance": utterance,
             "elapsed_s": round(time.time() - t0, 2),
@@ -1757,7 +1827,11 @@ def reposition_gridpoint_iterative(
     _report()
 
     return {
-        **candidate,
+        **_sanitize_candidate_for_field_margin(
+            candidate,
+            screen_w=screen_w,
+            screen_h=screen_h,
+        ),
         "content_desc": utterance,
         "utterance": utterance,
         "elapsed_s": elapsed,

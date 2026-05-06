@@ -462,6 +462,68 @@ def test_iterative_split_audit_passes_suitability_context_to_actuators(monkeypat
     assert all("needs_size=True" in context for context in seen_contexts)
 
 
+def test_positioning_field_margin_sanitizes_presented_candidate_without_menu_bar_guard(monkeypatch):
+    """Output geometry should leave a small optical-field edge margin, not reserve the menu bar."""
+    import importlib
+
+    reposition = importlib.import_module("spoke.positioning.reposition")
+
+    monkeypatch.setenv("SPOKE_POSITIONING_FIELD_EDGE_MARGIN_PX", "4")
+
+    candidate = {"x": 0.0, "y": 0.0, "width": 1.0, "height": 1.0}
+    sanitized = reposition._sanitize_candidate_for_field_margin(
+        candidate,
+        screen_w=100,
+        screen_h=100,
+    )
+
+    assert sanitized == {
+        "x": pytest.approx(0.04),
+        "y": pytest.approx(0.04),
+        "width": pytest.approx(0.92),
+        "height": pytest.approx(0.92),
+    }
+    assert sanitized["y"] < 0.24
+
+
+def test_iterative_positioning_sanitizes_output_but_not_model_candidate(monkeypatch):
+    """The edge margin is a final display filter, not a model-visible positioning rule."""
+    import importlib
+
+    reposition = importlib.import_module("spoke.positioning.reposition")
+
+    image = Image.new("RGB", (100, 100), "white")
+    audited_candidates = []
+
+    monkeypatch.setenv("SPOKE_POSITIONING_FIELD_EDGE_MARGIN_PX", "4")
+    monkeypatch.setattr(reposition, "_draw_grid_points", lambda img: img)
+    monkeypatch.setattr(reposition, "_draw_overlay_outline", lambda _screenshot, _overlay: image)
+    monkeypatch.setattr(reposition, "_encode_image", lambda _image: "image")
+    monkeypatch.setattr(reposition, "_pick_gridpoint", lambda *args, **kwargs: "C3")
+
+    def fake_suitability(_image_b64, _utterance, _screen_w, _screen_h, candidate, **_kwargs):
+        audited_candidates.append(dict(candidate))
+        return {"done": True, "needs_position": False, "needs_size": False, "reason": "right edge"}
+
+    monkeypatch.setattr(reposition, "_pick_suitability_audit", fake_suitability)
+
+    result = reposition.reposition_gridpoint_iterative(
+        "move to lower right",
+        image,
+        current_overlay={"x": 0.25, "y": 0.25, "width": 0.5, "height": 0.5},
+        screen_w=100,
+        screen_h=100,
+    )
+
+    assert audited_candidates == [
+        {"x": pytest.approx(0.50), "y": pytest.approx(0.50), "width": 0.5, "height": 0.5}
+    ]
+    assert result["x"] == pytest.approx(0.50)
+    assert result["y"] == pytest.approx(0.50)
+    assert result["width"] == pytest.approx(0.46)
+    assert result["height"] == pytest.approx(0.46)
+
+
 def test_largest_rectangle_target_picks_yes_cells():
     """largest_rectangle_target finds rect in YES (occupy) cells."""
     from spoke.positioning.reposition import largest_rectangle_target
