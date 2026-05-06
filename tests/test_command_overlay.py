@@ -3904,6 +3904,51 @@ class TestGeometryCaps:
         assert request["profile"] == "quiet_chip"
         assert request["compiled_shell_config"]["optical_field"]["profile"] == "quiet_chip"
 
+    def test_display_local_optical_shell_config_scales_agent_shell_card_requests(
+        self, mock_pyobjc, monkeypatch
+    ):
+        overlay, mod = _make_overlay(mock_pyobjc)
+        monkeypatch.setattr(mod, "_COMMAND_BACKDROP_OPTICAL_SHELL_ENABLED", True)
+        overlay._content_view.frame.return_value = _make_rect(28.0, 28.0, 624.0, 156.0)
+        overlay._agent_shell_primitives = [
+            {
+                "id": "codex-thread-1",
+                "kind": "thread_card",
+                "provider": "codex",
+                "provider_session_id": "codex-thread-1",
+                "selected": False,
+                "readiness": "ready",
+                "display": {
+                    "primary_text": "first thread",
+                    "secondary_text": "ready",
+                    "show_latest_response": False,
+                },
+                "geometry": {
+                    "anchor": "bottom",
+                    "preferred_width": 300.0,
+                    "preferred_height": 72.0,
+                },
+                "material": {"style": "quiet_chip"},
+            }
+        ]
+
+        config = overlay._display_local_optical_shell_config()
+        request = config["agent_shell_card_optical_fields"]["requests"][0]
+        child = request["compiled_shell_config"]
+
+        assert config["content_width_points"] == pytest.approx(
+            overlay._current_optical_shell_config()["content_width_points"] * 2.0
+        )
+        assert request["bounds"]["x"] == pytest.approx(24.0)
+        assert request["bounds"]["y"] == pytest.approx(24.0)
+        assert request["bounds"]["width"] == pytest.approx(600.0)
+        assert request["bounds"]["height"] == pytest.approx(144.0)
+        assert child["center_x"] == pytest.approx(324.0)
+        assert child["center_y"] == pytest.approx(96.0)
+        assert child["content_width_points"] == pytest.approx(600.0)
+        assert child["content_height_points"] == pytest.approx(144.0)
+        assert child["optical_field"]["bounds"] == request["bounds"]
+
     def test_update_layout_resets_text_geometry_to_match_visible_area(
         self, mock_pyobjc, monkeypatch
     ):

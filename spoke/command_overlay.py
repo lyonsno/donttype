@@ -674,6 +674,97 @@ def _command_optical_shell_config(
     }
 
 
+def _scale_rect_payload(rect: dict, scale: float) -> dict:
+    scaled = dict(rect)
+    for key in ("x", "y", "width", "height"):
+        if key in scaled:
+            try:
+                scaled[key] = float(scaled[key]) * scale
+            except (TypeError, ValueError):
+                pass
+    return scaled
+
+
+def _scale_shell_geometry_payload(config: dict, scale: float) -> dict:
+    scaled = dict(config)
+    for key in (
+        "center_x",
+        "center_y",
+        "content_width_points",
+        "content_height_points",
+        "corner_radius_points",
+        "band_width_points",
+        "tail_width_points",
+        "ring_amplitude_points",
+        "tail_amplitude_points",
+        "_materialization_base_width_points",
+        "_materialization_base_height_points",
+        "_materialization_base_corner_radius_points",
+    ):
+        if key in scaled:
+            try:
+                scaled[key] = float(scaled[key]) * scale
+            except (TypeError, ValueError):
+                pass
+    optical_field = scaled.get("optical_field")
+    if isinstance(optical_field, dict):
+        optical_field = dict(optical_field)
+        bounds = optical_field.get("bounds")
+        if isinstance(bounds, dict):
+            optical_field["bounds"] = _scale_rect_payload(bounds, scale)
+        previous_bounds = optical_field.get("previous_bounds")
+        if isinstance(previous_bounds, dict):
+            optical_field["previous_bounds"] = _scale_rect_payload(previous_bounds, scale)
+        scaled["optical_field"] = optical_field
+    return scaled
+
+
+def _scale_agent_shell_card_payload(shell_config: dict, scale: float) -> None:
+    renderer = shell_config.get("agent_shell_card_renderer")
+    if isinstance(renderer, dict):
+        renderer = dict(renderer)
+        cards = renderer.get("cards")
+        if isinstance(cards, list):
+            scaled_cards = []
+            for card in cards:
+                if not isinstance(card, dict):
+                    continue
+                scaled_card = dict(card)
+                frame = scaled_card.get("frame")
+                if isinstance(frame, dict):
+                    scaled_card["frame"] = _scale_rect_payload(frame, scale)
+                scaled_cards.append(scaled_card)
+            renderer["cards"] = scaled_cards
+        transcript_frame = renderer.get("transcript_frame")
+        if isinstance(transcript_frame, dict):
+            renderer["transcript_frame"] = _scale_rect_payload(transcript_frame, scale)
+        shell_config["agent_shell_card_renderer"] = renderer
+
+    optical_fields = shell_config.get("agent_shell_card_optical_fields")
+    if not isinstance(optical_fields, dict):
+        return
+    optical_fields = dict(optical_fields)
+    requests = optical_fields.get("requests")
+    if isinstance(requests, list):
+        scaled_requests = []
+        for request in requests:
+            if not isinstance(request, dict):
+                continue
+            scaled_request = dict(request)
+            bounds = scaled_request.get("bounds")
+            if isinstance(bounds, dict):
+                scaled_request["bounds"] = _scale_rect_payload(bounds, scale)
+            compiled = scaled_request.get("compiled_shell_config")
+            if isinstance(compiled, dict):
+                scaled_request["compiled_shell_config"] = _scale_shell_geometry_payload(
+                    compiled,
+                    scale,
+                )
+            scaled_requests.append(scaled_request)
+        optical_fields["requests"] = scaled_requests
+    shell_config["agent_shell_card_optical_fields"] = optical_fields
+
+
 def _materialized_optical_shell_config(
     shell_config: dict,
     progress: float,
@@ -5408,6 +5499,7 @@ class CommandOverlay(NSObject):
         ):
             if key in shell_config:
                 shell_config[key] = float(shell_config[key]) * scale
+        _scale_agent_shell_card_payload(shell_config, scale)
         return shell_config
 
     def _reset_text_geometry(
