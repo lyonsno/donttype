@@ -187,6 +187,7 @@ def _agent_shell_card_text_overlay_specs(
                 "client_id": _string(config.get("client_id")),
                 "text": "\n".join(part for part in (primary, secondary) if part),
                 "font_size": 15.0 if config.get("role") == "selected_thread" else 13.0,
+                "foreground_color": (0.92, 0.95, 1.0, 0.98),
                 "frame": {
                     "x": round(left + inset, 3),
                     "y": round(top + inset, 3),
@@ -533,7 +534,6 @@ class FullScreenCompositor:
                     layer.setContentsScale_(scale)
                     if hasattr(layer, "setZPosition_"):
                         layer.setZPosition_(10000.0)
-                    layer.setForegroundColor_(CGColorCreateSRGB(0.05, 0.06, 0.07, 0.96))
                     if hasattr(layer, "setShadowOpacity_"):
                         layer.setShadowOpacity_(0.35)
                     if hasattr(layer, "setShadowRadius_"):
@@ -547,6 +547,13 @@ class FullScreenCompositor:
                 layers[client_id] = layer
             frame = spec["frame"]
             try:
+                try:
+                    from Quartz import CGColorCreateSRGB
+
+                    foreground = spec.get("foreground_color", (0.92, 0.95, 1.0, 0.98))
+                    layer.setForegroundColor_(CGColorCreateSRGB(*foreground))
+                except Exception:
+                    logger.debug("Failed to update Agent Shell smoke text color", exc_info=True)
                 layer.setFrame_(
                     (
                         (frame["x"], frame["y"]),

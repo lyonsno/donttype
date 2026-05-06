@@ -581,6 +581,7 @@ def test_agent_shell_card_text_overlay_specs_use_card_bounds_and_text_payload(mo
             "client_id": "agent.card.codex-thread-1",
             "text": "Codex lane\nready",
             "font_size": 13.0,
+            "foreground_color": (0.92, 0.95, 1.0, 0.98),
             "frame": {
                 "x": 265.0,
                 "y": 219.0,
