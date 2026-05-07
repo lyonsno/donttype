@@ -39,6 +39,20 @@ OpticalFieldSignalName = Literal[
     "text_contrast_bias",
     "ridge_emphasis",
 ]
+OpticalFieldPresentationLayer = Literal[
+    "assistant_shell",
+    "user_preview",
+    "agent_card",
+    "hud",
+    "debug",
+]
+OpticalFieldVisibilityScope = Literal["independent", "follows_assistant_shell"]
+OpticalFieldSelectedHandoffMode = Literal[
+    "preserve_identity",
+    "handoff",
+    "new_presence",
+    "replace",
+]
 OpticalFieldMotionStrategy = Literal[
     "auto",
     "continuous",
@@ -71,6 +85,18 @@ _MATERIAL_SIGNAL_NAMES = {
     "background_luminance",
     "text_contrast_bias",
     "ridge_emphasis",
+}
+
+
+_ROLE_PRESENTATION_DEFAULTS: dict[str, tuple[str, int]] = {
+    "assistant": ("assistant_shell", 20),
+    "assistant_shell": ("assistant_shell", 20),
+    "agent_card": ("agent_card", 20),
+    "preview": ("user_preview", 30),
+    "user_preview": ("user_preview", 30),
+    "hud": ("hud", 50),
+    "tray": ("hud", 50),
+    "recovery": ("hud", 50),
 }
 
 
@@ -307,6 +333,36 @@ class OpticalFieldSignal:
 
 
 @dataclass(frozen=True)
+class OpticalFieldPresentation:
+    """Sibling presentation role and compositor ordering for one optical surface."""
+
+    layer: OpticalFieldPresentationLayer | str
+    order: int = 0
+
+    def __post_init__(self) -> None:
+        if not self.layer:
+            raise ValueError("presentation layer must be non-empty")
+
+
+@dataclass(frozen=True)
+class OpticalFieldSelectedHandoff:
+    """Boundary metadata for selected-card-to-shell handoff without content truth."""
+
+    from_caller_id: str
+    to_caller_id: str
+    continuity_key: str
+    mode: OpticalFieldSelectedHandoffMode = "handoff"
+
+    def __post_init__(self) -> None:
+        if not self.from_caller_id:
+            raise ValueError("selected handoff source caller must be non-empty")
+        if not self.to_caller_id:
+            raise ValueError("selected handoff target caller must be non-empty")
+        if not self.continuity_key:
+            raise ValueError("selected handoff continuity key must be non-empty")
+
+
+@dataclass(frozen=True)
 class OpticalFieldRequest:
     """Stable request contract consumed by future UI lanes."""
 
@@ -333,6 +389,9 @@ class OpticalFieldRequest:
         default_factory=OpticalFieldCoordinateContext
     )
     content_coordinate_context: OpticalFieldCoordinateContext | None = None
+    presentation: OpticalFieldPresentation | None = None
+    selected_handoff: OpticalFieldSelectedHandoff | None = None
+    visibility_scope: OpticalFieldVisibilityScope = "independent"
     visible: bool = True
     z_index: int = 0
 
@@ -356,6 +415,15 @@ class OpticalFieldRequest:
         if self.confidence is not None and not 0.0 <= self.confidence <= 1.0:
             raise ValueError("confidence must be between 0.0 and 1.0")
         object.__setattr__(self, "signals", tuple(self.signals))
+        if self.visibility_scope != "independent" and self.role in {
+            "agent_card",
+            "preview",
+            "user_preview",
+            "hud",
+        }:
+            raise ValueError("sibling surfaces must use independent visibility")
+        if self.presentation is None:
+            object.__setattr__(self, "presentation", _default_presentation_for_role(self.role))
         object.__setattr__(self, "disturbances", tuple(self.disturbances))
         if self.content_frame is not None and self.content_coordinate_context is None:
             object.__setattr__(
@@ -423,6 +491,11 @@ def available_optical_field_profiles() -> tuple[str, ...]:
     return tuple(_BASE_PROFILES)
 
 
+def _default_presentation_for_role(role: str) -> OpticalFieldPresentation:
+    layer, order = _ROLE_PRESENTATION_DEFAULTS.get(role, (role, 0))
+    return OpticalFieldPresentation(layer=layer, order=order)
+
+
 def _slot_name_for_state(state: OpticalFieldState) -> str:
     if state in {"materialize", "dismiss"}:
         return state
@@ -480,6 +553,19 @@ def _coordinate_metadata(
     return metadata
 
 
+def _selected_handoff_payload(
+    handoff: OpticalFieldSelectedHandoff | None,
+) -> dict[str, str] | None:
+    if handoff is None:
+        return None
+    return {
+        "from_caller_id": handoff.from_caller_id,
+        "to_caller_id": handoff.to_caller_id,
+        "continuity_key": handoff.continuity_key,
+        "mode": handoff.mode,
+    }
+
+
 def compile_placeholder_shell_config(request: OpticalFieldRequest) -> dict[str, Any]:
     """Compile one contract request into the current legacy shell-config shape."""
 
@@ -499,6 +585,8 @@ def compile_placeholder_shell_config(request: OpticalFieldRequest) -> dict[str, 
         for signal in request.signals
         if signal.name in _MATERIAL_SIGNAL_NAMES and isinstance(signal.value, (int, float))
     }
+    presentation = request.presentation or _default_presentation_for_role(request.role)
+    selected_handoff = _selected_handoff_payload(request.selected_handoff)
     scale = bounds.min_dimension
     corner_radius = min(
         scale * _float_param(params, "corner_radius_frac"),
@@ -511,6 +599,9 @@ def compile_placeholder_shell_config(request: OpticalFieldRequest) -> dict[str, 
         "enabled": True,
         "client_id": request.caller_id,
         "role": request.role,
+        "presentation_layer": presentation.layer,
+        "presentation_order": int(presentation.order),
+        "visibility_scope": request.visibility_scope,
         "z_index": int(request.z_index),
         "content_width_points": float(bounds.width),
         "content_height_points": float(bounds.height),
@@ -528,6 +619,10 @@ def compile_placeholder_shell_config(request: OpticalFieldRequest) -> dict[str, 
         "optical_field": {
             "caller_id": request.caller_id,
             "continuity_key": request.continuity_key,
+            "role": request.role,
+            "resolved_presentation_layer": presentation.layer,
+            "presentation_order": int(presentation.order),
+            "visibility_scope": request.visibility_scope,
             "profile": request.profile.base,
             "state": request.state,
             "lifecycle": request.state,
@@ -552,6 +647,7 @@ def compile_placeholder_shell_config(request: OpticalFieldRequest) -> dict[str, 
                 disturbance.disturbance_id for disturbance in request.disturbances
             ),
             **_coordinate_metadata(request, bounds, content_frame),
+            **({"selected_handoff": selected_handoff} if selected_handoff is not None else {}),
         },
     }
     if signals:
@@ -622,8 +718,16 @@ class OpticalFieldPlaceholderBackend:
         return tuple(self._requests.values())
 
     def compile_shell_configs(self) -> tuple[dict[str, Any], ...]:
-        return tuple(
-            compile_placeholder_shell_config(request)
-            for request in self._requests.values()
+        visible_requests = [
+            (index, request)
+            for index, request in enumerate(self._requests.values())
             if request.visible
+        ]
+        visible_requests.sort(
+            key=lambda item: (
+                int((item[1].presentation or _default_presentation_for_role(item[1].role)).order),
+                int(item[1].z_index),
+                item[0],
+            )
         )
+        return tuple(compile_placeholder_shell_config(request) for _index, request in visible_requests)
