@@ -468,12 +468,47 @@ def _compositor_fill_color_for_brightness(brightness: float) -> tuple[float, flo
 
 
 def _compositor_fill_alpha_multiplier_for_brightness(brightness: float) -> float:
-    # Only boost the light material used on dark backgrounds. The dark material
-    # on light backgrounds is already visually dense enough and should not drift.
-    return _lerp(
-        _COMPOSITOR_LIGHT_FILL_ALPHA_BOOST,
-        1.0,
-        _compositor_fill_choice_for_brightness(brightness),
+    return 1.0
+
+
+def _gpu_material_shell_fields(
+    brightness: float,
+    scale: float,
+    *,
+    text_contrast_bias: float = 0.5,
+    ridge_emphasis: float = 0.5,
+) -> dict[str, float]:
+    return {
+        "gpu_material_enabled": 1.0,
+        "gpu_material_brightness": _clamp01(brightness),
+        "gpu_material_opacity": 1.0,
+        "gpu_material_feather_points": _OPTICAL_SHELL_FEATHER * max(float(scale), 1.0),
+        "gpu_material_fill_overscan_points": (
+            _COMMAND_MATERIAL_FILL_OVERSCAN_POINTS * max(float(scale), 1.0)
+        ),
+        "gpu_material_text_contrast_bias": _clamp01(text_contrast_bias),
+        "gpu_material_ridge_emphasis": _clamp01(ridge_emphasis),
+    }
+
+
+def _with_gpu_material_basis(
+    config: dict,
+    *,
+    width: float,
+    height: float,
+    corner_radius: float,
+    progress: float = 1.0,
+) -> None:
+    if float(config.get("gpu_material_enabled", 0.0)) < 0.5:
+        return
+    state = _materialization_fill_state(progress)
+    config["gpu_material_base_width_points"] = max(float(width), 1.0)
+    config["gpu_material_base_height_points"] = max(float(height), 1.0)
+    config["gpu_material_base_corner_radius_points"] = max(float(corner_radius), 1.0)
+    config["gpu_material_height_frac"] = state["height_frac"]
+    config["gpu_material_opacity"] = min(
+        float(config.get("gpu_material_opacity", 1.0)),
+        state["opacity"] if progress < 1.0 else float(config.get("gpu_material_opacity", 1.0)),
     )
 
 
@@ -668,6 +703,13 @@ def _materialized_optical_shell_config(
     config["_materialization_base_width_points"] = base_w
     config["_materialization_base_height_points"] = base_h
     config["_materialization_base_corner_radius_points"] = base_radius
+    _with_gpu_material_basis(
+        config,
+        width=base_w,
+        height=base_h,
+        corner_radius=base_radius,
+        progress=p,
+    )
 
     spread_t = _snap_ease_in(p / _OPTICAL_MATERIALIZATION_SPREAD_END)
     bloom_t = _snap_ease_in(
@@ -2963,6 +3005,12 @@ class CommandOverlay(NSObject):
             self._brightness = _advance_command_brightness(current, target)
         t = getattr(self, "_brightness", 0.0)
         self._apply_surface_theme()
+        if compositor is not None:
+            updater = getattr(compositor, "update_shell_config_key", None)
+            last_material_brightness = getattr(self, "_last_gpu_material_brightness", -1.0)
+            if callable(updater) and abs(t - last_material_brightness) > 0.005:
+                updater("gpu_material_brightness", t)
+                self._last_gpu_material_brightness = t
         if getattr(self, "_materialization_timer", None) is not None:
             self._apply_materialization_fill_state(
                 getattr(self, "_materialization_progress", 1.0)
@@ -3269,6 +3317,13 @@ class CommandOverlay(NSObject):
             if abs(new_opacity - getattr(self, '_last_fill_opacity', -1.0)) > 0.005:
                 self._fill_layer.setOpacity_(new_opacity)
                 self._last_fill_opacity = new_opacity
+                updater = (
+                    getattr(compositor, "update_shell_config_key", None)
+                    if compositor is not None
+                    else None
+                )
+                if callable(updater):
+                    updater("gpu_material_opacity", new_opacity)
         # Brightness floor + boost for punch-through legibility.
         # On light backgrounds (dark fill), guarantee the warped content
         # inside the rounded shell has luminance >= 0.5 so text holes read bright.
@@ -3595,7 +3650,17 @@ class CommandOverlay(NSObject):
             if getattr(self, "_materialization_direction", 1) > 0:
                 self._materialization_progress = 1.0
                 self._apply_materialization_fill_state(1.0)
-                if getattr(self, "_text_punchthrough", False):
+                if float(final_config.get("gpu_material_enabled", 0.0)) >= 0.5:
+                    self._enable_text_punchthrough(False)
+                    self._set_layer_opacity_without_actions(
+                        getattr(self, "_fill_layer", None),
+                        0.0,
+                    )
+                    self._set_layer_hidden_without_actions(
+                        getattr(self, "_fill_layer", None),
+                        True,
+                    )
+                elif getattr(self, "_text_punchthrough", False):
                     self._refresh_punchthrough_mask_if_needed()
                 if (
                     getattr(self, "_visible", False)
@@ -3824,6 +3889,15 @@ class CommandOverlay(NSObject):
                 getattr(self, "_fill_image", None),
             )
         self._set_layer_opacity_without_actions(fill, state["opacity"])
+        compositor = getattr(self, "_fullscreen_compositor", None)
+        updater = (
+            getattr(compositor, "update_shell_config_key", None)
+            if compositor is not None
+            else None
+        )
+        if callable(updater):
+            updater("gpu_material_opacity", state["opacity"])
+            updater("gpu_material_height_frac", state["height_frac"])
         if hide_material_layers:
             for layer_name in ("_boost_layer", "_spring_tint_layer"):
                 self._set_layer_opacity_without_actions(
@@ -3940,6 +4014,10 @@ class CommandOverlay(NSObject):
         self._brightness = brightness
         self._brightness_target = brightness
         self._brightness_sample_tick = 0
+        updater = getattr(compositor, "update_shell_config_key", None)
+        if callable(updater):
+            updater("gpu_material_brightness", brightness)
+            self._last_gpu_material_brightness = brightness
         suppress_stale_fill = getattr(
             self,
             "_suppress_stale_fill_until_ready",
@@ -4314,8 +4392,8 @@ class CommandOverlay(NSObject):
                 cached_fill_alpha = None
                 sdf_appearance_b = -1.0
                 if _COMMAND_BACKDROP_OPTICAL_SHELL_ENABLED and _has_compositor:
-                    _ifloor = _lerp(0.60, 0.85, _clamp01(_b))
-                    interior = (_ifloor + (1.0 - _ifloor) * raw_interior)
+                    interior_floor = 0.72
+                    interior = (interior_floor + (1.0 - interior_floor) * raw_interior)
                     interior = np.clip(
                         interior + edge_ridge * 0.50,
                         0.0, 1.0,
@@ -4700,9 +4778,14 @@ class CommandOverlay(NSObject):
                 sampled_brightness = self._seed_brightness_from_optical_compositor()
                 if sampled_brightness is not None:
                     final_shell_config["initial_brightness"] = sampled_brightness
+                    final_shell_config["gpu_material_brightness"] = sampled_brightness
                     start_shell_config["initial_brightness"] = sampled_brightness
+                    start_shell_config["gpu_material_brightness"] = sampled_brightness
                     self._deferred_materialization_shell_config[
                         "initial_brightness"
+                    ] = sampled_brightness
+                    self._deferred_materialization_shell_config[
+                        "gpu_material_brightness"
                     ] = sampled_brightness
                 try:
                     compositor.update_shell_config(start_shell_config)
@@ -5041,9 +5124,8 @@ class CommandOverlay(NSObject):
         )
         shell_config["center_x"] = center_x
         shell_config["center_y"] = center_y
-        shell_config["initial_brightness"] = _clamp01(
-            float(getattr(self, "_brightness", 0.0))
-        )
+        brightness = _clamp01(float(getattr(self, "_brightness", 0.0)))
+        shell_config["initial_brightness"] = brightness
         for key in (
             "content_width_points",
             "content_height_points",
@@ -5053,6 +5135,21 @@ class CommandOverlay(NSObject):
         ):
             if key in shell_config:
                 shell_config[key] = float(shell_config[key]) * scale
+        text_contrast_bias = 1.0 if getattr(self, "_text_punchthrough", False) else 0.5
+        shell_config.update(
+            _gpu_material_shell_fields(
+                brightness,
+                scale,
+                text_contrast_bias=text_contrast_bias,
+                ridge_emphasis=0.5,
+            )
+        )
+        _with_gpu_material_basis(
+            shell_config,
+            width=float(shell_config.get("content_width_points", 1.0)),
+            height=float(shell_config.get("content_height_points", 1.0)),
+            corner_radius=float(shell_config.get("corner_radius_points", 1.0)),
+        )
         return shell_config
 
     def _reset_text_geometry(self, visible_height: float) -> None:

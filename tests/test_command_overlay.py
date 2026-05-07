@@ -1081,6 +1081,93 @@ class TestOpticalShellMaterialization:
 
         overlay._update_punchthrough_mask.assert_not_called()
 
+    def test_pulse_updates_gpu_material_brightness_without_cpu_fill_rebuild(
+        self, mock_pyobjc
+    ):
+        overlay, _mod = _make_overlay(mock_pyobjc)
+        overlay._visible = True
+        overlay._fullscreen_compositor = MagicMock()
+        overlay._fullscreen_compositor.sampled_brightness = 1.0
+        overlay._brightness = 0.0
+        overlay._brightness_target = 0.0
+        overlay._text_view.textStorage.return_value.length.return_value = 0
+        overlay._apply_ridge_masks = MagicMock()
+
+        overlay._pulseStepInner()
+
+        overlay._apply_ridge_masks.assert_not_called()
+        material_calls = [
+            call
+            for call in overlay._fullscreen_compositor.update_shell_config_key.call_args_list
+            if call.args[0] == "gpu_material_brightness"
+        ]
+        assert material_calls
+        assert material_calls[-1].args[1] == pytest.approx(overlay._brightness)
+
+    def test_compositor_sdf_alpha_multiplier_is_background_independent(
+        self, mock_pyobjc
+    ):
+        _overlay, mod = _make_overlay(mock_pyobjc)
+
+        assert mod._compositor_fill_alpha_multiplier_for_brightness(0.0) == pytest.approx(1.0)
+        assert mod._compositor_fill_alpha_multiplier_for_brightness(0.5) == pytest.approx(1.0)
+        assert mod._compositor_fill_alpha_multiplier_for_brightness(1.0) == pytest.approx(1.0)
+
+    def test_materialization_keeps_gpu_material_basis_at_final_geometry(
+        self, mock_pyobjc
+    ):
+        _overlay, mod = _make_overlay(mock_pyobjc)
+        final_config = {
+            "center_x": 640.0,
+            "center_y": 1160.0,
+            "content_width_points": 1200.0,
+            "content_height_points": 208.0,
+            "corner_radius_points": 32.0,
+            "gpu_material_enabled": 1.0,
+            "gpu_material_brightness": 0.42,
+            "gpu_material_opacity": 1.0,
+        }
+
+        seed = mod._materialized_optical_shell_config(final_config, 0.0)
+        mid = mod._materialized_optical_shell_config(final_config, 0.90)
+
+        assert seed["content_width_points"] < final_config["content_width_points"]
+        assert mid["content_height_points"] < final_config["content_height_points"]
+        for config in (seed, mid):
+            assert config["gpu_material_base_width_points"] == pytest.approx(
+                final_config["content_width_points"]
+            )
+            assert config["gpu_material_base_height_points"] == pytest.approx(
+                final_config["content_height_points"]
+            )
+            assert config["gpu_material_base_corner_radius_points"] == pytest.approx(
+                final_config["corner_radius_points"]
+            )
+        assert seed["gpu_material_height_frac"] < mid["gpu_material_height_frac"] < 1.0
+
+    def test_gpu_compositor_hides_cpu_fill_layer_after_materialization(
+        self, mock_pyobjc, monkeypatch
+    ):
+        overlay, mod = _make_overlay(mock_pyobjc)
+        overlay._fullscreen_compositor = MagicMock()
+        overlay._materialization_timer = MagicMock()
+        overlay._materialization_final_shell_config = {
+            "center_x": 640.0,
+            "center_y": 1160.0,
+            "content_width_points": 1200.0,
+            "content_height_points": 208.0,
+            "corner_radius_points": 32.0,
+            "gpu_material_enabled": 1.0,
+        }
+        overlay._materialization_direction = 1
+        overlay._materialization_started_at = 0.0
+        monkeypatch.setattr(mod.time, "perf_counter", lambda: mod._OPTICAL_MATERIALIZATION_S)
+
+        overlay.materializationStep_(overlay._materialization_timer)
+
+        overlay._fill_layer.setHidden_.assert_called_with(True)
+        overlay._scroll_view.setHidden_.assert_called_with(False)
+
     def test_fill_image_ready_preserves_active_materialization_geometry(
         self, mock_pyobjc
     ):
@@ -4190,10 +4277,10 @@ class TestSDFCaching:
         assert dismiss_alpha[1, 1] > 0.0
         assert overlay._dismiss_fill_image == "image-2"
 
-    def test_assistant_light_fill_gets_alpha_boost_on_dark_background_only(
+    def test_assistant_compositor_fill_alpha_is_background_independent(
         self, mock_pyobjc, monkeypatch
     ):
-        """Dark-background light shell fill should be denser without dark-fill drift."""
+        """Background brightness chooses GPU material color, not local SDF alpha."""
         overlay, mod = _make_overlay(mock_pyobjc)
         overlay._spring_tint_layer = None
         overlay._fullscreen_compositor = MagicMock()
@@ -4232,5 +4319,5 @@ class TestSDFCaching:
         overlay._apply_ridge_masks(600.0, 80.0)
         light_background_center = alphas[2][1, 1]
 
-        assert dark_background_center == pytest.approx(0.903, abs=0.01)
-        assert light_background_center == pytest.approx(0.851, abs=0.01)
+        assert dark_background_center == pytest.approx(light_background_center)
+        assert dark_background_center == pytest.approx(0.722, abs=0.01)

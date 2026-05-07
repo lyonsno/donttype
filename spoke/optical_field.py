@@ -15,6 +15,17 @@ from typing import Any, Literal, Mapping
 
 OpticalFieldState = Literal["rest", "materialize", "dismiss"]
 OpticalFieldDisturbanceMode = Literal["persistent", "ephemeral"]
+OpticalFieldSignalName = Literal[
+    "background_luminance",
+    "text_contrast_bias",
+    "ridge_emphasis",
+]
+
+_MATERIAL_SIGNAL_NAMES = {
+    "background_luminance",
+    "text_contrast_bias",
+    "ridge_emphasis",
+}
 
 
 @dataclass(frozen=True)
@@ -88,6 +99,22 @@ class OpticalFieldDisturbance:
 
 
 @dataclass(frozen=True)
+class OpticalFieldSignal:
+    """Finite live material signal accepted by the optical-field boundary."""
+
+    name: OpticalFieldSignalName
+    value: float
+    freshness_epoch: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.name not in _MATERIAL_SIGNAL_NAMES:
+            raise ValueError(f"unknown optical field signal: {self.name}")
+        if not 0.0 <= float(self.value) <= 1.0:
+            raise ValueError("optical field signal value must be between 0 and 1")
+        object.__setattr__(self, "value", float(self.value))
+
+
+@dataclass(frozen=True)
 class OpticalFieldRequest:
     """Stable request contract consumed by future UI lanes."""
 
@@ -97,6 +124,7 @@ class OpticalFieldRequest:
     state: OpticalFieldState = "rest"
     profile: OpticalFieldProfileRef = field(default_factory=OpticalFieldProfileRef)
     disturbances: tuple[OpticalFieldDisturbance, ...] = ()
+    signals: tuple[OpticalFieldSignal, ...] = ()
     visible: bool = True
     z_index: int = 0
 
@@ -106,6 +134,7 @@ class OpticalFieldRequest:
         if not self.role:
             raise ValueError("role must be non-empty")
         object.__setattr__(self, "disturbances", tuple(self.disturbances))
+        object.__setattr__(self, "signals", tuple(self.signals))
 
 
 _BASE_PROFILES: dict[str, dict[str, float | str | bool]] = {
@@ -188,6 +217,7 @@ def compile_placeholder_shell_config(request: OpticalFieldRequest) -> dict[str, 
     slot_name = _slot_name_for_state(request.state)
     params = _merged_profile_params(request.profile, slot_name)
     bounds = request.bounds
+    signals = {signal.name: signal.value for signal in request.signals}
     scale = bounds.min_dimension
     corner_radius = min(
         scale * _float_param(params, "corner_radius_frac"),
@@ -196,7 +226,7 @@ def compile_placeholder_shell_config(request: OpticalFieldRequest) -> dict[str, 
     )
     exterior_mix = scale * _float_param(params, "exterior_mix_frac")
 
-    return {
+    config = {
         "enabled": True,
         "client_id": request.caller_id,
         "role": request.role,
@@ -224,6 +254,21 @@ def compile_placeholder_shell_config(request: OpticalFieldRequest) -> dict[str, 
             ),
         },
     }
+    if signals:
+        config["optical_field"]["signals"] = dict(signals)
+        config.update(
+            {
+                "gpu_material_enabled": 1.0,
+                "gpu_material_brightness": float(
+                    signals.get("background_luminance", config.get("initial_brightness", 0.5))
+                ),
+                "gpu_material_text_contrast_bias": float(
+                    signals.get("text_contrast_bias", 0.5)
+                ),
+                "gpu_material_ridge_emphasis": float(signals.get("ridge_emphasis", 0.5)),
+            }
+        )
+    return config
 
 
 class OpticalFieldPlaceholderBackend:
