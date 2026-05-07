@@ -196,6 +196,23 @@ def compile_placeholder_shell_config(request: OpticalFieldRequest) -> dict[str, 
     )
     exterior_mix = scale * _float_param(params, "exterior_mix_frac")
 
+    timing_ms = {
+        key: float(params[key])
+        for key in ("duration_ms", "attack_ms", "release_ms")
+        if key in params
+    }
+    metadata: dict[str, Any] = {
+        "caller_id": request.caller_id,
+        "profile": request.profile.base,
+        "state": request.state,
+        "slot": slot_name,
+        "disturbances": tuple(
+            disturbance.disturbance_id for disturbance in request.disturbances
+        ),
+    }
+    if timing_ms:
+        metadata["timing_ms"] = timing_ms
+
     return {
         "enabled": True,
         "client_id": request.caller_id,
@@ -214,15 +231,7 @@ def compile_placeholder_shell_config(request: OpticalFieldRequest) -> dict[str, 
         "bleed_zone_frac": _float_param(params, "bleed_zone_frac"),
         "exterior_mix_width_points": exterior_mix,
         "mip_blur_strength": _float_param(params, "mip_blur_strength"),
-        "optical_field": {
-            "caller_id": request.caller_id,
-            "profile": request.profile.base,
-            "state": request.state,
-            "slot": slot_name,
-            "disturbances": tuple(
-                disturbance.disturbance_id for disturbance in request.disturbances
-            ),
-        },
+        "optical_field": metadata,
     }
 
 
