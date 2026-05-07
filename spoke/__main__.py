@@ -140,6 +140,7 @@ def _run_modal_with_paste(alert) -> int:
 
 from .capture import AudioCapture
 from .command import CommandClient, _DEFAULT_COMMAND_MODEL, _DEFAULT_COMMAND_URL
+from .command_overlay_trace import record_command_overlay_trace
 from .converge import TurnCarver, compact_history as compact_converge_history
 from .narrator import ThinkingNarrator
 from .focus_check import has_focused_text_input
@@ -2470,6 +2471,19 @@ class SpokeAppDelegate(NSObject):
                     self._command_overlay is not None
                     and getattr(self._command_overlay, "_visible", False)
                 )
+                try:
+                    empty_enter_has_snapshot = self._last_command_overlay_snapshot() is not None
+                except Exception:
+                    empty_enter_has_snapshot = False
+                record_command_overlay_trace(
+                    "delegate.empty_enter_hold",
+                    command_overlay_visible=command_overlay_visible,
+                    detector_active=bool(
+                        getattr(self._detector, "command_overlay_active", False)
+                    ),
+                    has_snapshot=empty_enter_has_snapshot,
+                    transcribing=bool(getattr(self, "_transcribing", False)),
+                )
                 if not command_overlay_visible:
                     logger.info(
                         "Enter held on empty — recalling assistant overlay from slow toggle path"
@@ -3338,10 +3352,27 @@ class SpokeAppDelegate(NSObject):
             self._command_overlay is not None
             and getattr(self._command_overlay, '_visible', False)
         )
+        try:
+            trace_snapshot = self._last_command_overlay_snapshot()
+        except Exception:
+            trace_snapshot = None
+        record_command_overlay_trace(
+            "delegate.toggle.begin",
+            overlay_visible=overlay_visible,
+            detector_active=bool(
+                getattr(self._detector, "command_overlay_active", False)
+            ),
+            pending_approval=bool(
+                getattr(self, "_pending_command_approval_active", False)
+            ),
+            transcribing=bool(getattr(self, "_transcribing", False)),
+            has_snapshot=trace_snapshot is not None,
+        )
         if overlay_visible:
             logger.info("Double-tap Enter — dismissing command overlay")
             self._command_overlay.cancel_dismiss()
             self._detector.command_overlay_active = False
+            record_command_overlay_trace("delegate.toggle.dismiss")
         elif (
             getattr(self, "_pending_command_approval_active", False)
             and self._command_overlay is not None
@@ -3427,8 +3458,12 @@ class SpokeAppDelegate(NSObject):
                         )
                         self._command_overlay.finish()
                         self._detector.command_overlay_active = True
+                        record_command_overlay_trace("delegate.toggle.recall")
                     except Exception:
                         logger.exception("Recall overlay failed")
+                        record_command_overlay_trace("delegate.toggle.recall_failed")
+            else:
+                record_command_overlay_trace("delegate.toggle.no_snapshot")
         else:
             logger.info("Double-tap Enter — no assistant overlay snapshot to recall")
 

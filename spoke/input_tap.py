@@ -23,6 +23,8 @@ from typing import Callable
 import objc
 from Foundation import NSObject, NSTimer
 
+from .command_overlay_trace import record_command_overlay_trace
+
 from Quartz import (
     CFMachPortCreateRunLoopSource,
     CFRunLoopAddSource,
@@ -345,6 +347,12 @@ class SpacebarHoldDetector(NSObject):
             self._shift_latched = self._shift_at_press
             self._tray_gesture_consumed = False
             self._shift_down_during_hold = False
+            record_command_overlay_trace(
+                "input.space_down_waiting",
+                command_overlay_active=bool(
+                    getattr(self, "command_overlay_active", False)
+                ),
+            )
             self._start_hold_timer()
             return True  # suppress the space
 
@@ -510,6 +518,11 @@ class SpacebarHoldDetector(NSObject):
         """Transition WAITING -> RECORDING and invoke hold-start once."""
         self._cancel_hold_timer()
         self._state = _State.RECORDING
+        record_command_overlay_trace(
+            "input.promote_waiting_to_recording",
+            command_overlay_active=bool(getattr(self, "command_overlay_active", False)),
+            enter_held=bool(getattr(self, "_enter_held", False)),
+        )
         self._start_safety_timer()
         self._on_hold_start()
 
@@ -790,6 +803,12 @@ def _event_tap_callback(proxy, event_type, event, refcon):
                     det._state = _State.IDLE
                     det._enter_held = False
                     det._suppress_enter_keyup = True
+                    record_command_overlay_trace(
+                        "input.enter_during_waiting",
+                        command_overlay_active=bool(
+                            getattr(det, "command_overlay_active", False)
+                        ),
+                    )
                     cb = getattr(det, '_on_enter_during_waiting', None)
                     if cb is not None:
                         logger.info("Enter during WAITING — toggling command overlay")

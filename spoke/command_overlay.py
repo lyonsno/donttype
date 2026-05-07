@@ -46,6 +46,7 @@ from .backdrop_stream import (
     _debug_shell_grid_ci_image,
     make_backdrop_renderer,
 )
+from .command_overlay_trace import record_command_overlay_trace
 from .overlay import (
     _OVERLAY_WINDOW_LEVEL,
     _post_overlay_result_to_main,
@@ -2191,6 +2192,13 @@ class CommandOverlay(NSObject):
         """Fade the overlay in, optionally starting or resuming the thinking timer."""
         if self._window is None:
             return
+        record_command_overlay_trace(
+            "overlay.show.begin",
+            was_visible=bool(getattr(self, "_visible", False)),
+            had_compositor=getattr(self, "_fullscreen_compositor", None) is not None,
+            initial_utterance=bool(initial_utterance),
+            initial_response=bool(initial_response),
+        )
         self._cancel_all_timers()
         self._reset_fill_generation_latches_for_show()
         if getattr(self, "_fullscreen_compositor", None) is not None:
@@ -2313,6 +2321,14 @@ class CommandOverlay(NSObject):
             and getattr(self, "_fullscreen_compositor", None) is None
         ):
             self._start_backdrop_refresh_timer()
+        record_command_overlay_trace(
+            "overlay.show.end",
+            visible=bool(getattr(self, "_visible", False)),
+            has_compositor=getattr(self, "_fullscreen_compositor", None) is not None,
+            window_alpha=self._window.alphaValue() if self._window is not None else None,
+            visual_ready_timer=getattr(self, "_visual_ready_timer", None) is not None,
+            fade_timer=getattr(self, "_fade_timer", None) is not None,
+        )
 
     def set_brightness(self, brightness: float, immediate: bool = False) -> None:
         """Set screen brightness (0.0 dark – 1.0 bright) for adaptive compositing."""
@@ -2387,15 +2403,23 @@ class CommandOverlay(NSObject):
         """Dismiss with a fast pop-then-shrink animation."""
         if self._window is None:
             return
+        record_command_overlay_trace(
+            "overlay.cancel_dismiss.begin",
+            visible=bool(getattr(self, "_visible", False)),
+            has_compositor=getattr(self, "_fullscreen_compositor", None) is not None,
+            window_alpha=self._window.alphaValue(),
+        )
         self._cancel_all_timers()
         self._streaming = False
         if getattr(self, "_fullscreen_compositor", None) is not None:
             self._visible = False
             if self._cancel_pending_optical_entrance_if_invisible():
+                record_command_overlay_trace("overlay.cancel_dismiss.pending_entrance")
                 return
             self._window.setAlphaValue_(1.0)
             self._set_overlay_scale(1.0)
             self._start_fade_out()
+            record_command_overlay_trace("overlay.cancel_dismiss.optical_fade")
             return
         self._visible = True  # keep visible for the animation
 
@@ -2406,6 +2430,7 @@ class CommandOverlay(NSObject):
         self._cancel_timer_anim = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
             1.0 / _DISMISS_ANIM_FPS, self, "_cancelAnimStep:", None, True
         )
+        record_command_overlay_trace("overlay.cancel_dismiss.local_anim")
 
     def _cancelAnimStep_(self, timer) -> None:
         """Animate the dismiss sequence: grow for 60ms, then shrink and fade."""
@@ -3545,6 +3570,12 @@ class CommandOverlay(NSObject):
             alpha = 1.0
         if alpha > 0.001:
             return False
+        record_command_overlay_trace(
+            "overlay.pending_entrance_teardown",
+            fill_hidden=getattr(self, "_fill_hidden_until_signature", None) is not None,
+            pending_fill=getattr(self, "_pending_fill_image_signature", None) is not None,
+            visual_ready_timer=getattr(self, "_visual_ready_timer", None) is not None,
+        )
         self._cancel_visual_ready_start()
         self._cancel_entrance_pop()
         self._cancel_materialization_animation()
@@ -3560,6 +3591,12 @@ class CommandOverlay(NSObject):
 
     def _start_entrance_animation(self) -> None:
         """Start the visible entrance once first-paint dependencies are ready."""
+        record_command_overlay_trace(
+            "overlay.entrance.start",
+            materialization_progress=getattr(self, "_materialization_progress", None),
+            has_compositor=getattr(self, "_fullscreen_compositor", None) is not None,
+            fill_ready=self._optical_fill_ready(),
+        )
         self._cancel_entrance_pop()
         self._cancel_fade()
 
