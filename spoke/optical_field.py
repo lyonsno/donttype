@@ -15,6 +15,24 @@ from typing import Any, Literal, Mapping
 
 OpticalFieldState = Literal["rest", "materialize", "resize", "recenter", "dismiss", "hidden"]
 OpticalFieldDisturbanceMode = Literal["persistent", "ephemeral"]
+OpticalFieldMotionStrategy = Literal[
+    "auto",
+    "continuous",
+    "morph",
+    "squirt",
+    "dematerialize_rematerialize",
+    "snap",
+]
+OpticalFieldContinuity = Literal["preserve_identity", "handoff", "new_presence", "replace"]
+OpticalFieldResolvedMotionStrategy = Literal[
+    "continuous",
+    "morph",
+    "squirt",
+    "dematerialize_rematerialize",
+    "snap",
+]
+_DEFAULT_AUTO_MOTION_OVERLAP_THRESHOLD = 0.50
+_DEFAULT_AUTO_SAME_PRESENCE_STRATEGY: OpticalFieldResolvedMotionStrategy = "squirt"
 
 
 @dataclass(frozen=True)
@@ -88,6 +106,37 @@ class OpticalFieldDisturbance:
 
 
 @dataclass(frozen=True)
+class OpticalFieldMotionIntent:
+    """Consumer motion intent as finite data; House owns execution policy."""
+
+    strategy: OpticalFieldMotionStrategy = "auto"
+    continuity: OpticalFieldContinuity = "preserve_identity"
+    overlap_threshold: float = _DEFAULT_AUTO_MOTION_OVERLAP_THRESHOLD
+    same_presence_strategy: OpticalFieldResolvedMotionStrategy = (
+        _DEFAULT_AUTO_SAME_PRESENCE_STRATEGY
+    )
+
+    def __post_init__(self) -> None:
+        if not 0.0 <= self.overlap_threshold <= 1.0:
+            raise ValueError("motion overlap_threshold must be between 0.0 and 1.0")
+        if self.same_presence_strategy == "dematerialize_rematerialize":
+            raise ValueError("same_presence_strategy must preserve the current presence")
+
+
+@dataclass(frozen=True)
+class OpticalFieldResolvedMotion:
+    """House motion-policy decision for a desired target."""
+
+    requested_strategy: OpticalFieldMotionStrategy
+    resolved_strategy: OpticalFieldResolvedMotionStrategy
+    continuity: OpticalFieldContinuity
+    overlap_ratio: float
+    overlap_threshold: float
+    same_presence: bool
+    reason: str
+
+
+@dataclass(frozen=True)
 class OpticalFieldRequest:
     """Stable request contract consumed by future UI lanes."""
 
@@ -102,6 +151,7 @@ class OpticalFieldRequest:
     source_epoch: int | None = None
     display_epoch: int | None = None
     provisional: bool = False
+    motion: OpticalFieldMotionIntent | None = None
 
     def __post_init__(self) -> None:
         if not self.caller_id:
@@ -217,8 +267,127 @@ def _float_param(params: Mapping[str, Any], key: str) -> float:
     return float(params[key])
 
 
+def optical_field_overlap_ratio(
+    current_bounds: OpticalFieldBounds,
+    target_bounds: OpticalFieldBounds,
+) -> float:
+    """Return intersection area divided by the smaller participating area."""
+
+    intersection_width = max(
+        0.0,
+        min(
+            current_bounds.x + current_bounds.width,
+            target_bounds.x + target_bounds.width,
+        )
+        - max(current_bounds.x, target_bounds.x),
+    )
+    intersection_height = max(
+        0.0,
+        min(
+            current_bounds.y + current_bounds.height,
+            target_bounds.y + target_bounds.height,
+        )
+        - max(current_bounds.y, target_bounds.y),
+    )
+    intersection_area = intersection_width * intersection_height
+    smaller_area = min(
+        current_bounds.width * current_bounds.height,
+        target_bounds.width * target_bounds.height,
+    )
+    if smaller_area <= 0.0:
+        return 0.0
+    return intersection_area / smaller_area
+
+
+def resolve_optical_field_motion(
+    current_bounds: OpticalFieldBounds | None,
+    target_bounds: OpticalFieldBounds,
+    intent: OpticalFieldMotionIntent,
+) -> OpticalFieldResolvedMotion:
+    """Resolve a finite motion intent into House-owned visual continuity policy."""
+
+    if intent.strategy != "auto":
+        same_presence = intent.strategy != "dematerialize_rematerialize"
+        return OpticalFieldResolvedMotion(
+            requested_strategy=intent.strategy,
+            resolved_strategy=intent.strategy,
+            continuity=intent.continuity,
+            overlap_ratio=1.0 if current_bounds is not None else 0.0,
+            overlap_threshold=float(intent.overlap_threshold),
+            same_presence=same_presence,
+            reason="explicit_strategy",
+        )
+
+    if current_bounds is None:
+        return OpticalFieldResolvedMotion(
+            requested_strategy="auto",
+            resolved_strategy="dematerialize_rematerialize",
+            continuity=intent.continuity,
+            overlap_ratio=0.0,
+            overlap_threshold=float(intent.overlap_threshold),
+            same_presence=False,
+            reason="no_current_presence",
+        )
+
+    overlap_ratio = optical_field_overlap_ratio(current_bounds, target_bounds)
+    if intent.continuity in {"new_presence", "replace"}:
+        return OpticalFieldResolvedMotion(
+            requested_strategy="auto",
+            resolved_strategy="dematerialize_rematerialize",
+            continuity=intent.continuity,
+            overlap_ratio=overlap_ratio,
+            overlap_threshold=float(intent.overlap_threshold),
+            same_presence=False,
+            reason="new_presence_continuity",
+        )
+
+    if overlap_ratio > intent.overlap_threshold:
+        return OpticalFieldResolvedMotion(
+            requested_strategy="auto",
+            resolved_strategy=intent.same_presence_strategy,
+            continuity=intent.continuity,
+            overlap_ratio=overlap_ratio,
+            overlap_threshold=float(intent.overlap_threshold),
+            same_presence=True,
+            reason="overlap_above_threshold",
+        )
+
+    return OpticalFieldResolvedMotion(
+        requested_strategy="auto",
+        resolved_strategy="dematerialize_rematerialize",
+        continuity=intent.continuity,
+        overlap_ratio=overlap_ratio,
+        overlap_threshold=float(intent.overlap_threshold),
+        same_presence=False,
+        reason="overlap_at_or_below_threshold",
+    )
+
+
 def _bounds_metadata(bounds: OpticalFieldBounds) -> tuple[float, float, float, float]:
     return (float(bounds.x), float(bounds.y), float(bounds.width), float(bounds.height))
+
+
+def _with_motion_metadata(
+    optical_field: dict[str, Any],
+    request: OpticalFieldRequest,
+    transition: OpticalFieldTransitionState | None,
+) -> dict[str, Any]:
+    if request.motion is None:
+        return optical_field
+
+    current_bounds = transition.presented_bounds if transition is not None else None
+    resolved = resolve_optical_field_motion(current_bounds, request.bounds, request.motion)
+    optical_field = dict(optical_field)
+    optical_field["motion"] = {
+        "requested_strategy": resolved.requested_strategy,
+        "resolved_strategy": resolved.resolved_strategy,
+        "continuity": resolved.continuity,
+        "overlap_ratio": float(resolved.overlap_ratio),
+        "overlap_threshold": float(resolved.overlap_threshold),
+        "same_presence": bool(resolved.same_presence),
+        "reason": resolved.reason,
+    }
+    return optical_field
 
 
 def _with_transition_metadata(
@@ -287,6 +456,7 @@ def compile_placeholder_shell_config(
         request,
         transition,
     )
+    optical_field = _with_motion_metadata(optical_field, request, transition)
 
     return {
         "enabled": True,
