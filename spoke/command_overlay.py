@@ -2425,6 +2425,7 @@ class CommandOverlay(NSObject):
         initial_response: str = "",
         agent_shell_header: str = "",
         agent_shell_footer: str = "",
+        agent_shell_primitives: list[dict] | None = None,
     ) -> None:
         """Fade the overlay in, optionally starting or resuming the thinking timer."""
         if self._window is None:
@@ -2451,6 +2452,11 @@ class CommandOverlay(NSObject):
         self._utterance_text = ""
         self._collapsed_text = ""
         self._clear_agent_shell_chrome()
+        self._agent_shell_primitives = [
+            dict(primitive)
+            for primitive in (agent_shell_primitives or [])
+            if isinstance(primitive, dict)
+        ]
         # Reset TTS state so stale blend doesn't affect new responses
         self._tts_active = False
         self._tts_blend = 0.0

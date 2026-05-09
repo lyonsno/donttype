@@ -2265,6 +2265,26 @@ class TestShowFinishHide:
         overlay.set_agent_shell_header.assert_called_once_with("Worktree: codex-spinal-tap")
         overlay.set_agent_shell_footer.assert_called_once_with("model gpt-5.5 | cwd /tmp/spoke")
 
+    def test_show_can_seed_agent_shell_primitives_for_reconstructed_transcript(
+        self, mock_pyobjc
+    ):
+        overlay, _ = _make_overlay(mock_pyobjc)
+        primitive = {
+            "id": "codex-thread-1",
+            "kind": "selected_thread",
+            "provider_session_id": "codex-thread-1",
+            "display": {"primary_text": "Codex lane"},
+        }
+
+        overlay.show(
+            start_thinking_timer=False,
+            initial_utterance="hello codex",
+            initial_response="hello from codex",
+            agent_shell_primitives=[primitive],
+        )
+
+        assert overlay._agent_shell_primitives == [primitive]
+
     def test_agent_shell_chrome_theme_uses_neutral_gray_not_glow_purple(
         self, mock_pyobjc
     ):
