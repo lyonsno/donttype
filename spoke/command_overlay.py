@@ -254,7 +254,7 @@ _AGENT_SHELL_FOOTER_HEIGHT = 16.0
 _AGENT_SHELL_CHROME_X = 28.0
 _AGENT_SHELL_HEADER_TOP_INSET = 10.0
 _AGENT_SHELL_FOOTER_BOTTOM_INSET = 8.0
-_AGENT_SHELL_TRANSCRIPT_GAP = 12.0
+_AGENT_SHELL_TRANSCRIPT_GAP = 28.0
 _AGENT_SHELL_VERTICAL_PAD = (
     _AGENT_SHELL_HEADER_TOP_INSET
     + _AGENT_SHELL_HEADER_HEIGHT
@@ -5299,12 +5299,37 @@ class CommandOverlay(NSObject):
             if fw <= 0 or fh <= 0:
                 return
 
+            def _origin_x(frame) -> float:
+                try:
+                    return float(frame.origin.x)
+                except (AttributeError, TypeError):
+                    return float(frame[0][0])
+
+            def _origin_y(frame) -> float:
+                try:
+                    return float(frame.origin.y)
+                except (AttributeError, TypeError):
+                    return float(frame[0][1])
+
+            def _width(frame) -> float:
+                try:
+                    return float(frame.size.width)
+                except (AttributeError, TypeError):
+                    return float(frame[1][0])
+
+            def _height(frame) -> float:
+                try:
+                    return float(frame.size.height)
+                except (AttributeError, TypeError):
+                    return float(frame[1][1])
+
             # Content offset within the fill layer
             content_frame = content.frame()
-            cx = content_frame[0][0]
-            cy = content_frame[0][1]
+            cx = _origin_x(content_frame)
+            cy = _origin_y(content_frame)
 
             # Scroll offset and text frame
+            scroll_frame = self._scroll_view.frame()
             scroll_origin = self._scroll_view.contentView().bounds().origin
             text_frame = self._text_view.frame()
 
@@ -5338,22 +5363,32 @@ class CommandOverlay(NSObject):
             CGContextTranslateCTM(ctx, 0, fh)
             CGContextScaleCTM(ctx, 1.0, -1.0)
 
-            # Now (0,0) is top-left in the flipped sense.
-            # Content view is at (cx, cy) in wrapper coords (bottom-up).
-            # In top-down: content top = fh - cy - content_h
-            content_h = content_frame[1][1]
-            scroll_frame = self._scroll_view.frame()
-            scroll_x = scroll_frame.origin.x
-            scroll_y = scroll_frame.origin.y
-            visible_w = scroll_frame.size.width
-            visible_h = scroll_frame.size.height
-            text_x = cx + scroll_x
-            visible_y = (fh - cy - content_h) + scroll_y
-            text_y = visible_y - scroll_origin.y
+            content_h = _height(content_frame)
+            content_top = fh - cy - content_h
+            scroll_top = content_top + (
+                content_h - _origin_y(scroll_frame) - _height(scroll_frame)
+            )
+            text_x = (
+                cx
+                + _origin_x(scroll_frame)
+                + _origin_x(text_frame)
+                - getattr(scroll_origin, "x", 0.0)
+            )
+            text_y = (
+                scroll_top
+                + _origin_y(text_frame)
+                + _TRANSCRIPT_TEXT_VERTICAL_INSET
+                - getattr(scroll_origin, "y", 0.0)
+            )
 
-            text_w = text_frame.size.width
-            text_h = text_frame.size.height
-            visible_clip = CGRectMake(text_x, visible_y, visible_w, visible_h)
+            text_w = _width(text_frame)
+            text_h = _height(text_frame)
+            visible_clip = CGRectMake(
+                cx + _origin_x(scroll_frame),
+                scroll_top,
+                _width(scroll_frame),
+                _height(scroll_frame),
+            )
             CGContextClipToRect(ctx, visible_clip)
             ts.drawInRect_(NSMakeRect(text_x, text_y, text_w, text_h))
 
@@ -5669,16 +5704,7 @@ class CommandOverlay(NSObject):
                     NSMakeRect(_AGENT_SHELL_CHROME_X, footer_y, footer_w, footer_h)
                 )
             if height_changed:
-                suppress_stale_fill = getattr(
-                    self,
-                    "_suppress_stale_fill_until_ready",
-                    False,
-                )
-                self._suppress_stale_fill_until_ready = True
-                try:
-                    self._apply_ridge_masks(_OVERLAY_WIDTH, new_height)
-                finally:
-                    self._suppress_stale_fill_until_ready = suppress_stale_fill
+                self._apply_ridge_masks(_OVERLAY_WIDTH, new_height)
                 self._update_backdrop_capture_geometry()
                 shell_config = self._current_optical_shell_config()
                 if shell_config is not None and hasattr(self._backdrop_renderer, "set_live_optical_shell_config"):
