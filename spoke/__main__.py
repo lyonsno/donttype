@@ -44,6 +44,8 @@ from Foundation import NSMakeRect, NSObject, NSTimer
 _NS_COMMAND_KEY_MASK = 1 << 20
 _NS_KEY_DOWN_MASK = 1 << 10
 _RECORDING_LOAD_SHED_RELEASE_DELAY_S = 0.36
+_AGENT_SHELL_PROVIDERS = {"codex", "claude-code"}
+_AGENT_SHELL_SELECTABLE_PROVIDERS = {"codex"}
 
 # Keep _PastableTextField as an alias so existing alloc() calls don't break.
 _PastableTextField = NSTextField
@@ -95,6 +97,14 @@ def _format_command_http_error(exc) -> str:
     if detail:
         return f"{base} — {detail}"
     return base
+
+
+def _agent_shell_provider_label(provider: str | None) -> str:
+    if provider == "claude-code":
+        return "Claude Code"
+    if provider == "codex":
+        return "Codex"
+    return "Agent Shell"
 
 
 def _run_modal_with_paste(alert) -> int:
@@ -152,7 +162,14 @@ from .handsfree import (
 )
 from .scene_capture import SceneCaptureCache
 from .optical_shell_metrics import OpticalShellMetrics
-from .agent_sdk_operator import AgentSDKManager
+from .agent_backend_presenter import (
+    AgentBackendPresentationState,
+    present_backend_events,
+    present_backend_idle,
+    present_backend_liveness,
+)
+from .agent_backends import AgentBackendManager
+from .agent_shell import AgentShellState, route_agent_shell_input
 from .subagents import SubagentManager, run_search_subagent_query
 from .tool_dispatch import execute_tool, get_search_subagent_tool_schemas, get_tool_schemas
 from .glow import GlowOverlay
@@ -1089,8 +1106,10 @@ class SpokeAppDelegate(NSObject):
                     cancel_check=cancel_check,
                 )
             )
-            self._agent_sdk_manager = AgentSDKManager()
+            self._agent_backend_manager = AgentBackendManager()
             self._agent_shell_provider = self._load_preference("agent_shell_provider") or "off"
+            self._agent_shell_sessions: dict[str, dict[str, str | None]] = {}
+            self._agent_backend_presentation_states = {}
             # Converge: per-turn attractor carver (same model, OMLX batch parallel)
             self._turn_carver = TurnCarver(
                 base_url=command_url,
@@ -1148,8 +1167,10 @@ class SpokeAppDelegate(NSObject):
             self._scene_cache = None
             self._tool_schemas = None
             self._subagent_manager = None
-            self._agent_sdk_manager = None
+            self._agent_backend_manager = None
             self._agent_shell_provider = "off"
+            self._agent_shell_sessions = {}
+            self._agent_backend_presentation_states = {}
 
         # Heartbeat — zombie sweep runs before us, this starts the writer.
         self._heartbeat = HeartbeatManager()
@@ -2919,6 +2940,10 @@ class SpokeAppDelegate(NSObject):
 
     def _last_command_overlay_snapshot(self) -> tuple[str, str] | None:
         """Return the most recent assistant overlay content, including failures."""
+        agent_shell_provider = self._active_agent_shell_provider()
+        if agent_shell_provider is not None:
+            return self._agent_shell_overlay_snapshot(agent_shell_provider)
+
         utterance = getattr(self, "_last_command_utterance", "")
         response = getattr(self, "_last_command_response", "")
         if self._command_client is not None:
@@ -3419,36 +3444,37 @@ class SpokeAppDelegate(NSObject):
             self._command_client is not None
             and self._command_overlay is not None
         ):
-            pending_snapshot_getter = getattr(
-                self._command_client, "pending_approval_snapshot", None
-            )
-            snapshot = (
-                pending_snapshot_getter()
-                if callable(pending_snapshot_getter)
-                else None
-            )
-            if isinstance(snapshot, dict):
-                utterance = snapshot.get("utterance", "")
-                base_response = snapshot.get("base_response", "")
-                approval_request = snapshot.get("approval_request") or {}
-                self._pending_command_approval_active = True
-                self._pending_command_approval_request = approval_request
-                self._last_command_utterance = utterance
-                self._command_streaming_text = base_response
-                logger.info("Double-tap Enter — restoring durable pending approval overlay")
-                try:
-                    self._sync_command_overlay_brightness(immediate=True)
-                    self._command_overlay.show(
-                        start_thinking_timer=False,
-                        initial_utterance=utterance,
-                        initial_response=self._compose_pending_approval_overlay_body(),
-                    )
-                    self._command_overlay.finish()
-                    self._detector.approval_active = True
-                    self._detector.command_overlay_active = True
-                except Exception:
-                    logger.exception("Restore durable pending approval overlay failed")
-                return
+            if self._active_agent_shell_provider() is None:
+                pending_snapshot_getter = getattr(
+                    self._command_client, "pending_approval_snapshot", None
+                )
+                snapshot = (
+                    pending_snapshot_getter()
+                    if callable(pending_snapshot_getter)
+                    else None
+                )
+                if isinstance(snapshot, dict):
+                    utterance = snapshot.get("utterance", "")
+                    base_response = snapshot.get("base_response", "")
+                    approval_request = snapshot.get("approval_request") or {}
+                    self._pending_command_approval_active = True
+                    self._pending_command_approval_request = approval_request
+                    self._last_command_utterance = utterance
+                    self._command_streaming_text = base_response
+                    logger.info("Double-tap Enter — restoring durable pending approval overlay")
+                    try:
+                        self._sync_command_overlay_brightness(immediate=True)
+                        self._command_overlay.show(
+                            start_thinking_timer=False,
+                            initial_utterance=utterance,
+                            initial_response=self._compose_pending_approval_overlay_body(),
+                        )
+                        self._command_overlay.finish()
+                        self._detector.approval_active = True
+                        self._detector.command_overlay_active = True
+                    except Exception:
+                        logger.exception("Restore durable pending approval overlay failed")
+                    return
             snapshot = self._last_command_overlay_snapshot()
             if snapshot is not None:
                 last_utterance, last_response = snapshot
@@ -3654,6 +3680,306 @@ class SpokeAppDelegate(NSObject):
 
     # ── command pathway ────────────────────────────────────
 
+    def _active_agent_shell_provider(self) -> str | None:
+        provider = getattr(self, "_agent_shell_provider", "off") or "off"
+        if provider not in _AGENT_SHELL_PROVIDERS:
+            return None
+        if getattr(self, "_agent_backend_manager", None) is None:
+            return None
+        return provider
+
+    def _agent_shell_session_record(self, provider: str) -> dict[str, str | None]:
+        sessions = getattr(self, "_agent_shell_sessions", None)
+        if sessions is None:
+            sessions = {}
+            self._agent_shell_sessions = sessions
+        record = sessions.get(provider)
+        if not isinstance(record, dict):
+            record = {"spoke_session_id": None, "provider_session_id": None}
+            sessions[provider] = record
+        spoke_session_id = record.get("spoke_session_id")
+        manager = getattr(self, "_agent_backend_manager", None)
+        if isinstance(spoke_session_id, str) and spoke_session_id and manager is not None:
+            latest = manager.get_session(spoke_session_id)
+            if isinstance(latest, dict):
+                provider_session_id = latest.get("provider_session_id")
+                if isinstance(provider_session_id, str) and provider_session_id:
+                    record["provider_session_id"] = provider_session_id
+        return record
+
+    def _agent_shell_overlay_snapshot(self, provider: str) -> tuple[str, str] | None:
+        record = self._agent_shell_session_record(provider)
+        utterance = record.get("last_utterance")
+        response = record.get("last_response")
+        if isinstance(utterance, str) and utterance and isinstance(response, str) and response:
+            return utterance, response
+        return None
+
+    def _remember_agent_shell_overlay_snapshot(
+        self,
+        provider: str,
+        utterance: str,
+        response: str,
+    ) -> None:
+        if provider not in _AGENT_SHELL_PROVIDERS or not utterance or not response:
+            return
+        record = self._agent_shell_session_record(provider)
+        record["last_utterance"] = utterance
+        record["last_response"] = response
+
+    def _agent_shell_state(self, provider: str) -> AgentShellState:
+        record = self._agent_shell_session_record(provider)
+        spoke_session_id = record.get("spoke_session_id")
+        provider_session_id = record.get("provider_session_id")
+        return AgentShellState(
+            active=True,
+            provider=provider,
+            spoke_session_id=spoke_session_id if isinstance(spoke_session_id, str) else None,
+            provider_session_id=(
+                provider_session_id if isinstance(provider_session_id, str) else None
+            ),
+            cwd=os.getcwd(),
+        )
+
+    def _remember_agent_shell_session(self, provider: str, session: dict) -> None:
+        session_id = session.get("id")
+        provider_session_id = session.get("provider_session_id")
+        record = self._agent_shell_session_record(provider)
+        if isinstance(session_id, str) and session_id:
+            record["spoke_session_id"] = session_id
+        if isinstance(provider_session_id, str) and provider_session_id:
+            record["provider_session_id"] = provider_session_id
+
+    def _agent_backend_presentation_state(
+        self,
+        session_id: str,
+    ) -> AgentBackendPresentationState:
+        states = getattr(self, "_agent_backend_presentation_states", None)
+        if not isinstance(states, dict):
+            states = {}
+            self._agent_backend_presentation_states = states
+        state = states.get(session_id)
+        if not isinstance(state, AgentBackendPresentationState):
+            state = AgentBackendPresentationState()
+            states[session_id] = state
+        return state
+
+    def _present_agent_backend_events(
+        self,
+        session_id: str,
+        session: dict,
+        seen_sequence: int,
+        token: int,
+    ) -> int:
+        events = session.get("backend_events")
+        if not isinstance(events, list):
+            return seen_sequence
+        new_events = [
+            event
+            for event in events
+            if isinstance(event, dict)
+            and isinstance(event.get("sequence"), int)
+            and event["sequence"] > seen_sequence
+        ]
+        if not new_events:
+            return seen_sequence
+        state = self._agent_backend_presentation_state(session_id)
+        for action in present_backend_events(new_events, state):
+            self._apply_agent_backend_presentation_action(action, token)
+        return max(event["sequence"] for event in new_events)
+
+    def _apply_agent_backend_presentation_action(self, action, token: int) -> None:
+        if action.kind == "response_delta" and action.text:
+            self.performSelectorOnMainThread_withObject_waitUntilDone_(
+                "commandToken:",
+                {"token": token, "text": action.text},
+                False,
+            )
+        elif action.kind == "status" and action.text:
+            self.performSelectorOnMainThread_withObject_waitUntilDone_(
+                "commandToken:",
+                {"token": token, "text": f"{action.text}\n"},
+                False,
+            )
+        elif action.kind == "narrator_summary" and action.text:
+            self.performSelectorOnMainThread_withObject_waitUntilDone_(
+                "narratorSummary:",
+                {"token": token, "summary": action.text},
+                False,
+            )
+        elif action.kind == "narrator_shimmer":
+            self.performSelectorOnMainThread_withObject_waitUntilDone_(
+                "narratorShimmer:",
+                {"token": token, "active": bool(action.active)},
+                False,
+            )
+        elif action.kind == "tool_start":
+            self.performSelectorOnMainThread_withObject_waitUntilDone_(
+                "commandToolStart:",
+                {"token": token},
+                False,
+            )
+        elif action.kind == "tool_end":
+            self.performSelectorOnMainThread_withObject_waitUntilDone_(
+                "commandToolEnd:",
+                {"token": token},
+                False,
+            )
+        elif action.kind == "error" and action.text:
+            self.performSelectorOnMainThread_withObject_waitUntilDone_(
+                "commandToken:",
+                {"token": token, "text": f"{action.text}\n"},
+                False,
+            )
+
+    def _maybe_route_agent_shell_text(self, text: str, token: int) -> bool:
+        provider = self._active_agent_shell_provider()
+        if provider is None:
+            return False
+        decision = route_agent_shell_input(text, self._agent_shell_state(provider))
+        if decision.kind == "provider_message":
+            self._start_agent_shell_provider_turn(decision, token)
+            return True
+        if decision.kind == "mode_control" and decision.control_action == "switch_provider":
+            self._complete_agent_shell_mode_control(decision.provider, token)
+            return True
+        return False
+
+    def _complete_agent_shell_mode_control(self, provider: str | None, token: int) -> None:
+        if provider not in _AGENT_SHELL_PROVIDERS:
+            self.performSelectorOnMainThread_withObject_waitUntilDone_(
+                "commandFailed:",
+                {"token": token, "error": "Unknown Agent Shell provider"},
+                False,
+            )
+            return
+        if provider not in _AGENT_SHELL_SELECTABLE_PROVIDERS:
+            label = _agent_shell_provider_label(provider)
+            self.performSelectorOnMainThread_withObject_waitUntilDone_(
+                "commandFailed:",
+                {
+                    "token": token,
+                    "error": f"{label} backend is reserved but not wired yet.",
+                },
+                False,
+            )
+            return
+        self._apply_agent_shell_selection(provider)
+        label = _agent_shell_provider_label(provider)
+        self.performSelectorOnMainThread_withObject_waitUntilDone_(
+            "commandComplete:",
+            {"token": token, "response": f"Agent Shell switched to {label}."},
+            False,
+        )
+
+    def _start_agent_shell_provider_turn(
+        self,
+        decision,
+        token: int,
+    ) -> None:
+        provider = decision.provider
+        manager = getattr(self, "_agent_backend_manager", None)
+        if provider not in _AGENT_SHELL_PROVIDERS or manager is None:
+            self.performSelectorOnMainThread_withObject_waitUntilDone_(
+                "commandFailed:",
+                {"token": token, "error": "Agent Shell provider is not available"},
+                False,
+            )
+            return
+        self._command_turn_route = "agent_shell"
+        self._command_turn_provider = provider
+
+        def _run() -> None:
+            label = _agent_shell_provider_label(provider)
+            if self._menubar is not None:
+                self._menubar.set_status_text(f"Sending to {label}…")
+            try:
+                launched = manager.launch(
+                    provider=provider,
+                    prompt=decision.text,
+                    cwd=decision.cwd or os.getcwd(),
+                    resume_id=decision.provider_session_id,
+                )
+                if isinstance(launched, dict):
+                    self._remember_agent_shell_session(provider, launched)
+                session_id = launched.get("id") if isinstance(launched, dict) else None
+                if not isinstance(session_id, str) or not session_id:
+                    raise RuntimeError(f"{label} did not return a Spoke session id")
+
+                session = launched
+                seen_backend_event_sequence = 0
+                for action in present_backend_liveness(label):
+                    self._apply_agent_backend_presentation_action(action, token)
+                while token == self._transcription_token:
+                    latest = manager.get_session(session_id)
+                    if isinstance(latest, dict):
+                        session = latest
+                        seen_backend_event_sequence = self._present_agent_backend_events(
+                            session_id,
+                            session,
+                            seen_backend_event_sequence,
+                            token,
+                        )
+                    state = session.get("state") if isinstance(session, dict) else None
+                    if state in {"completed", "failed", "cancelled"}:
+                        break
+                    time.sleep(0.2)
+
+                if token != self._transcription_token:
+                    manager.cancel(session_id)
+                    return
+
+                if isinstance(session, dict):
+                    self._remember_agent_shell_session(provider, session)
+                    state = session.get("state")
+                    if state == "completed":
+                        response = session.get("result") or f"{label} session completed."
+                        for action in present_backend_idle():
+                            self._apply_agent_backend_presentation_action(action, token)
+                        self.performSelectorOnMainThread_withObject_waitUntilDone_(
+                            "commandComplete:",
+                            {"token": token, "response": str(response)},
+                            False,
+                        )
+                        return
+                    if state == "cancelled":
+                        for action in present_backend_idle():
+                            self._apply_agent_backend_presentation_action(action, token)
+                        self.performSelectorOnMainThread_withObject_waitUntilDone_(
+                            "commandFailed:",
+                            {"token": token, "error": f"{label} session cancelled"},
+                            False,
+                        )
+                        return
+                    error = session.get("error") or f"{label} session failed"
+                    for action in present_backend_idle():
+                        self._apply_agent_backend_presentation_action(action, token)
+                    self.performSelectorOnMainThread_withObject_waitUntilDone_(
+                        "commandFailed:",
+                        {"token": token, "error": str(error)},
+                        False,
+                    )
+                    return
+
+                for action in present_backend_idle():
+                    self._apply_agent_backend_presentation_action(action, token)
+                self.performSelectorOnMainThread_withObject_waitUntilDone_(
+                    "commandFailed:",
+                    {"token": token, "error": f"{label} returned an invalid session"},
+                    False,
+                )
+            except Exception as exc:
+                logger.exception("Agent Shell provider turn failed")
+                for action in present_backend_idle():
+                    self._apply_agent_backend_presentation_action(action, token)
+                self.performSelectorOnMainThread_withObject_waitUntilDone_(
+                    "commandFailed:",
+                    {"token": token, "error": str(exc)},
+                    False,
+                )
+
+        threading.Thread(target=_run, daemon=True).start()
+
     def _send_text_as_command(self, text: str) -> None:
         """Send pre-transcribed text to the command pathway.
 
@@ -3676,6 +4002,9 @@ class SpokeAppDelegate(NSObject):
             {"token": token, "utterance": text},
             False,
         )
+
+        if self._maybe_route_agent_shell_text(text, token):
+            return
 
         # Stream the command in a background thread
         def _stream():
@@ -3809,7 +4138,7 @@ class SpokeAppDelegate(NSObject):
                 tts_client=_tool_tts_client(name),
                 tray_writer=self._add_assistant_content_to_tray,
                 subagent_manager=getattr(self, "_subagent_manager", None),
-                agent_sdk_manager=getattr(self, "_agent_sdk_manager", None),
+                agent_backend_manager=getattr(self, "_agent_backend_manager", None),
                 history_compactor=_compact_history,
                 **kwargs,
             )
@@ -3864,6 +4193,9 @@ class SpokeAppDelegate(NSObject):
             {"token": token, "utterance": utterance},
             False,
         )
+
+        if self._maybe_route_agent_shell_text(utterance, token):
+            return
 
         # Step 2: Stream the command response
         full_response = ""
@@ -4008,6 +4340,8 @@ class SpokeAppDelegate(NSObject):
         self._command_streaming_text = ""
         self._pending_command_approval_active = False
         self._pending_command_approval_request = None
+        self._command_turn_route = "local"
+        self._command_turn_provider = None
         self._detector.approval_active = False
         # Hide the input overlay
         if self._overlay is not None:
@@ -4132,16 +4466,37 @@ class SpokeAppDelegate(NSObject):
         overlay = self._command_overlay
         if overlay is not None:
             overlay.set_tool_active(False)
-        response = payload.get("response", "")
-        if response:
-            self._last_command_response = response
-        if overlay is not None and response:
+        response = str(payload.get("response") or "")
+        streaming = getattr(self, "_command_streaming_text", "")
+        visible_response = response
+        if streaming:
+            streaming_body = streaming.rstrip()
+            response_body = response.strip()
+            if response_body and response_body not in streaming:
+                visible_response = (
+                    f"{streaming_body}\n\n{response}" if streaming_body else response
+                )
+            else:
+                visible_response = streaming
+        if visible_response:
+            self._last_command_response = visible_response
+            self._command_streaming_text = visible_response
+            if getattr(self, "_command_turn_route", None) == "agent_shell":
+                provider = getattr(self, "_command_turn_provider", None)
+                utterance = getattr(self, "_last_command_utterance", "")
+                if isinstance(provider, str):
+                    self._remember_agent_shell_overlay_snapshot(
+                        provider,
+                        utterance,
+                        visible_response,
+                    )
+        if overlay is not None and visible_response:
             try:
                 # If the streamed visible body already matches the final
                 # response, preserve it in place so collapsed thinking and
                 # tool/result ordering do not get rebuilt back to the top.
-                if getattr(self, "_command_streaming_text", "") != response:
-                    overlay.set_response_text(response)
+                if streaming != visible_response:
+                    overlay.set_response_text(visible_response)
             except Exception:
                 logger.exception("Command overlay failed to apply final response text")
         if overlay is not None:
@@ -4801,19 +5156,19 @@ class SpokeAppDelegate(NSObject):
 
     def _agent_shell_menu_state(self) -> dict:
         selected = getattr(self, "_agent_shell_provider", "off") or "off"
-        if selected not in {"off", "claude", "codex"}:
+        if selected not in {"off", "codex", "claude-code"}:
             selected = "off"
         return {
             "title": "Agent Shell",
             "items": [
                 ("off", "Off", selected == "off", True),
-                ("claude", "Claude Agent SDK", selected == "claude", True),
-                ("codex", "Codex SDK", selected == "codex", True),
+                ("codex", "Codex", selected == "codex", True),
+                ("claude-code", "Claude Code", selected == "claude-code", False),
             ],
         }
 
     def _apply_agent_shell_selection(self, provider: str) -> None:
-        provider = provider if provider in {"off", "claude", "codex"} else "off"
+        provider = provider if provider in {"off", "codex"} else "off"
         self._agent_shell_provider = provider
         self._save_preference("agent_shell_provider", provider)
         if self._menubar is not None:
