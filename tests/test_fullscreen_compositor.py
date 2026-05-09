@@ -517,6 +517,51 @@ def test_host_keeps_agent_shell_card_surfaces_independent_of_parent_visibility(m
     ]
 
 
+def test_agent_shell_card_surfaces_are_clamped_inside_display_bounds(monkeypatch):
+    fullscreen_compositor = _reset_fake_compositor(monkeypatch)
+
+    source_config = {
+        "client_id": "assistant.command",
+        "center_x": 1700.0,
+        "center_y": 520.0,
+        "content_width_points": 900.0,
+        "content_height_points": 280.0,
+        "display_width_points": 1920.0,
+        "display_height_points": 1080.0,
+        "agent_shell_card_optical_fields": {
+            "surface_kind": "agent_shell_card_optical_fields",
+            "requests": [
+                {
+                    "caller_id": "agent.card.codex-thread-1",
+                    "text": {"primary": "Codex lane", "secondary": "ready"},
+                    "compiled_shell_config": {
+                        "client_id": "agent.card.codex-thread-1",
+                        "role": "agent_card",
+                        "center_x": 840.0,
+                        "center_y": 80.0,
+                        "content_width_points": 600.0,
+                        "content_height_points": 144.0,
+                        "optical_field": {
+                            "bounds": {
+                                "x": 540.0,
+                                "y": 8.0,
+                                "width": 600.0,
+                                "height": 144.0,
+                            },
+                        },
+                    },
+                }
+            ],
+        },
+    }
+
+    surfaces = fullscreen_compositor._agent_shell_card_surface_configs(source_config)
+
+    card = surfaces["agent.card.codex-thread-1"]
+    assert card["center_x"] <= 1920.0 - 300.0 - 12.0
+    assert card["center_y"] >= 72.0 + 12.0
+
+
 def test_agent_shell_card_text_overlay_specs_use_card_bounds_and_text_payload(monkeypatch):
     fullscreen_compositor = _reset_fake_compositor(monkeypatch)
 

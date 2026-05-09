@@ -3663,6 +3663,8 @@ class TestAdaptiveCompositing:
         shell_config = captured["shell_config"]
         assert shell_config["center_x"] == pytest.approx(640.0)
         assert shell_config["center_y"] == pytest.approx(1160.0)
+        assert shell_config["display_width_points"] == pytest.approx(2560.0)
+        assert shell_config["display_height_points"] == pytest.approx(1440.0)
 
     def test_current_optical_shell_config_consumes_agent_shell_primitives(
         self, mock_pyobjc, monkeypatch

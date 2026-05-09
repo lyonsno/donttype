@@ -5582,6 +5582,8 @@ class CommandOverlay(NSObject):
         )
         shell_config["center_x"] = center_x
         shell_config["center_y"] = center_y
+        shell_config["display_width_points"] = float(screen_frame.size.width) * scale
+        shell_config["display_height_points"] = float(screen_frame.size.height) * scale
         brightness = _clamp01(float(getattr(self, "_brightness", 0.0)))
         shell_config["initial_brightness"] = brightness
         for key in (
