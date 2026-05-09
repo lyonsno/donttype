@@ -77,3 +77,27 @@ def test_selected_resting_display_exposes_latest_real_response():
     assert display["primary_text"] == "Here is the real Codex response, not a bearing summary."
     assert display["compact_text"] == "summarize packet · Ready to read"
     assert "summarize packet" in display["bearing"]
+
+
+def test_working_card_without_orientation_does_not_echo_full_prompt():
+    from spoke.agent_thread_cards import build_agent_thread_card
+
+    prompt = (
+        "Yes well you don't know unless I tell you I guess it's probably what "
+        "you're going to say it looks like our UI cut off the last line"
+    )
+
+    card = build_agent_thread_card(
+        {
+            "id": "agent-backend-codex-1",
+            "provider": "codex",
+            "state": "running",
+            "prompt": prompt,
+            "backend_events": [],
+        }
+    )
+
+    assert card.readiness == "working"
+    assert card.title == "Agent thread"
+    assert card.activity_line == "Working"
+    assert card.bearing == "No durable bearing captured yet"
