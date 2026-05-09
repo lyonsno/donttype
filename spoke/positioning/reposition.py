@@ -850,6 +850,29 @@ GRIDPOINT_LATTICES = {
     "B": (0.3125, 0.5625, 0.8125),
 }
 
+FILL_REGION_UTTERANCE_HINTS = (
+    "fill",
+    "empty space",
+    "open space",
+    "blank space",
+    "available space",
+    "cover the empty",
+    "cover that space",
+    "occupy",
+    "take up",
+    "use the space",
+    "expand into",
+)
+
+
+def _classify_positioning_geometry(utterance: str) -> str:
+    """Route requests that ask for a region itself away from point seeding."""
+
+    normalized = re.sub(r"\s+", " ", utterance.lower()).strip()
+    if any(hint in normalized for hint in FILL_REGION_UTTERANCE_HINTS):
+        return "fill_region"
+    return "point"
+
 
 def _gridpoint_coords(label: str, screen_w: int, screen_h: int) -> tuple[int, int]:
     """Convert a grid-point label (e.g. 'B2') to pixel center coordinates."""
@@ -1895,7 +1918,7 @@ def reposition_gridpoint_iterative(
     on_step: "callable | None" = None,
     bearing: str | None = None,
 ) -> dict | None:
-    """Grid-point seed followed by bounded cheap suitability/center/size rounds."""
+    """Route positioning through point seeding or audit-first rectangle repair."""
 
     reposition_gridpoint_iterative._last_debug = []
     t0 = time.time()
@@ -1907,12 +1930,22 @@ def reposition_gridpoint_iterative(
     if current_overlay is None:
         current_overlay = {"x": 0.3, "y": 0.3, "width": 0.4, "height": 0.4}
 
+    geometry = _classify_positioning_geometry(utterance)
+    if geometry == "fill_region":
+        reposition_gridpoint_iterative._last_debug.append(
+            "Geometry: fill_region (audit-first rectangle refinement)"
+        )
+    else:
+        reposition_gridpoint_iterative._last_debug.append("Geometry: point (grid seed)")
+    _report()
+
     if bearing:
         reposition_gridpoint_iterative._last_debug.append(f"Bearing: {bearing[:200]}")
         _report()
 
     annotated = _draw_overlay_outline(screenshot, current_overlay)
-    annotated = _draw_grid_points(annotated)
+    if geometry == "point":
+        annotated = _draw_grid_points(annotated)
     screenshot_b64 = _encode_image(annotated)
 
     cur_w = max(1, int(current_overlay["width"] * screen_w))
@@ -1923,7 +1956,21 @@ def reposition_gridpoint_iterative(
     cx, cy = cur_cx, cur_cy
     label = None
     ensemble = None
-    if _positioning_gridpoint_ensemble_enabled():
+    if geometry == "fill_region":
+        candidate = dict(current_overlay)
+        reposition_gridpoint_iterative._last_debug.append(
+            "Geometry: auditing current rectangle before proposing a seed"
+        )
+        _report(
+            _positioning_intermediate(
+                candidate,
+                utterance=utterance,
+                elapsed_s=time.time() - t0,
+                screen_w=screen_w,
+                screen_h=screen_h,
+            )
+        )
+    elif _positioning_gridpoint_ensemble_enabled():
         workers = _gridpoint_ensemble_workers()
         lattices = _gridpoint_ensemble_lattice_sequence(workers)
         reposition_gridpoint_iterative._last_debug.append(
@@ -1975,7 +2022,7 @@ def reposition_gridpoint_iterative(
             )
             _report()
 
-    if label is None:
+    if geometry != "fill_region" and label is None:
         for attempt in range(3):
             label = _pick_gridpoint(
                 screenshot_b64,
@@ -1999,12 +2046,20 @@ def reposition_gridpoint_iterative(
             )
             _report()
 
-    if label is None:
+    if geometry != "fill_region" and label is None:
         reposition_gridpoint_iterative._last_debug.append(
             "GridPoint: no parse after 3 attempts, auditing current center"
         )
 
-    candidate = _candidate_from_center(cx, cy, cur_w, cur_h, screen_w=screen_w, screen_h=screen_h)
+    if geometry != "fill_region":
+        candidate = _candidate_from_center(
+            cx,
+            cy,
+            cur_w,
+            cur_h,
+            screen_w=screen_w,
+            screen_h=screen_h,
+        )
     if ensemble is not None:
         _report(
             _positioning_intermediate(

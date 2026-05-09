@@ -486,6 +486,99 @@ def test_iterative_split_audit_passes_suitability_context_to_actuators(monkeypat
     assert all("needs_size=True" in context for context in seen_contexts)
 
 
+def test_positioning_geometry_classifies_fill_region_commands():
+    """Fill/region commands should not be treated as point-placement commands."""
+    from spoke.positioning.reposition import _classify_positioning_geometry
+
+    assert _classify_positioning_geometry("Hey, could you fill the empty space?") == "fill_region"
+    assert _classify_positioning_geometry("Can you fill the empty space in the low right?") == (
+        "fill_region"
+    )
+    assert _classify_positioning_geometry("move to the upper right") == "point"
+    assert _classify_positioning_geometry("get out of my way") == "point"
+
+
+def test_fill_region_positioning_skips_gridpoint_seed_and_audits_current_candidate(monkeypatch):
+    """Fill/region repair should start from the visible rectangle, not a point-grid seed."""
+    import importlib
+
+    reposition = importlib.import_module("spoke.positioning.reposition")
+
+    image = Image.new("RGB", (100, 100), "white")
+    audited_candidates = []
+    suitability = [
+        {
+            "done": False,
+            "needs_position": True,
+            "needs_size": True,
+            "reason": "current rectangle misses the bottom empty space",
+        },
+        {
+            "done": True,
+            "needs_position": False,
+            "needs_size": False,
+            "reason": "fills the target region",
+        },
+    ]
+
+    monkeypatch.setenv("SPOKE_POSITIONING_GRIDPOINT_ENSEMBLE", "1")
+    monkeypatch.setattr(
+        reposition,
+        "_pick_gridpoint_ensemble",
+        lambda *args, **kwargs: pytest.fail("fill-region path should not run ensemble seed"),
+    )
+    monkeypatch.setattr(
+        reposition,
+        "_pick_gridpoint",
+        lambda *args, **kwargs: pytest.fail("fill-region path should not run point seed"),
+    )
+    monkeypatch.setattr(reposition, "_draw_grid_points", lambda img: img)
+    monkeypatch.setattr(reposition, "_draw_overlay_outline", lambda _screenshot, _overlay: image)
+    monkeypatch.setattr(reposition, "_encode_image", lambda _image: "image")
+
+    def fake_suitability(_image_b64, _utterance, _screen_w, _screen_h, candidate, **_kwargs):
+        audited_candidates.append(dict(candidate))
+        return suitability.pop(0)
+
+    monkeypatch.setattr(reposition, "_pick_suitability_audit", fake_suitability)
+    monkeypatch.setattr(
+        reposition,
+        "_pick_center_audit",
+        lambda *args, **kwargs: {"center_x": 50, "center_y": 95, "reason": "bottom center"},
+    )
+    monkeypatch.setattr(
+        reposition,
+        "_pick_size_audit",
+        lambda *args, **kwargs: {"width": 80, "height": 10, "reason": "bottom empty band"},
+    )
+
+    result = reposition.reposition_gridpoint_iterative(
+        "Hey, could you fill the empty space?",
+        image,
+        current_overlay={"x": 0.3, "y": 0.3, "width": 0.4, "height": 0.4},
+        screen_w=100,
+        screen_h=100,
+    )
+
+    assert audited_candidates[0] == {
+        "x": pytest.approx(0.3),
+        "y": pytest.approx(0.3),
+        "width": pytest.approx(0.4),
+        "height": pytest.approx(0.4),
+    }
+    assert audited_candidates[1] == {
+        "x": pytest.approx(0.1),
+        "y": pytest.approx(0.9),
+        "width": pytest.approx(0.8),
+        "height": pytest.approx(0.1),
+    }
+    assert result["x"] == pytest.approx(0.10)
+    assert result["y"] == pytest.approx(0.90)
+    assert result["width"] == pytest.approx(0.80)
+    assert result["height"] == pytest.approx(0.10)
+    assert "Geometry: fill_region" in "\n".join(result["_debug_lines"])
+
+
 def test_gridpoint_ensemble_aggregates_offset_lattice_coordinates():
     """Offset-grid votes should combine labels through lattice-specific coordinates."""
     from spoke.positioning.reposition import (
