@@ -230,7 +230,7 @@ class TestAdaptiveOverlayCompositing:
         finally:
             sys.modules.pop("spoke.overlay", None)
 
-    def test_dark_background_uses_light_text_and_provides_rms_signal(self, mock_pyobjc):
+    def test_dark_background_uses_light_text_without_fill(self, mock_pyobjc):
         sys.modules.pop("spoke.overlay", None)
         mod = importlib.import_module("spoke.overlay")
         try:
@@ -240,24 +240,24 @@ class TestAdaptiveOverlayCompositing:
             mod.NSColor.colorWithSRGBRed_green_blue_alpha_.reset_mock()
             overlay.update_text_amplitude(10.0)
 
-            # Text should be dark (dark text on light fill for dark backgrounds)
+            # Fillless preview: text should read directly over a dark
+            # warped background.
             color_calls = mod.NSColor.colorWithSRGBRed_green_blue_alpha_.call_args_list
             text_color_args = None
             for call in color_calls:
                 r, g, b, _ = call[0]
-                if r < 0.1 and g < 0.1 and b < 0.1:
+                if r > 0.9 and g > 0.9 and b > 0.9:
                     text_color_args = call[0]
             assert text_color_args is not None
 
-            # Fill opacity is House-owned — consumer does not call
-            # setOpacity_ directly.  The amplitude is available as
-            # _text_amplitude for inclusion in optical field signals.
+            # The amplitude is still tracked locally for future consumers, but
+            # the fillless smoke does not use it to paint an SDF material.
             assert overlay._text_amplitude > 0.0
         finally:
             sys.modules.pop("spoke.overlay", None)
 
-    def test_light_background_text_is_white_on_dark_fill(self, mock_pyobjc):
-        """On bright backgrounds, text is white against the dark fill."""
+    def test_light_background_text_is_dark_without_fill(self, mock_pyobjc):
+        """On bright backgrounds, fillless preview text is dark."""
         sys.modules.pop("spoke.overlay", None)
         mod = importlib.import_module("spoke.overlay")
         try:
@@ -268,8 +268,7 @@ class TestAdaptiveOverlayCompositing:
             overlay.update_text_amplitude(10.0)
 
             text_r, text_g, text_b, text_alpha = mod.NSColor.colorWithSRGBRed_green_blue_alpha_.call_args_list[0][0]
-            # White text on dark fill for light backgrounds
-            assert text_r > 0.7 and text_g > 0.7 and text_b > 0.7
+            assert text_r < 0.1 and text_g < 0.1 and text_b < 0.1
             assert text_alpha > 0.5
         finally:
             sys.modules.pop("spoke.overlay", None)
@@ -291,7 +290,7 @@ class TestAdaptiveOverlayCompositing:
         finally:
             sys.modules.pop("spoke.overlay", None)
 
-    def test_light_background_preview_text_reaches_true_white(self, mock_pyobjc):
+    def test_light_background_preview_text_reaches_true_black(self, mock_pyobjc):
         sys.modules.pop("spoke.overlay", None)
         mod = importlib.import_module("spoke.overlay")
         try:
@@ -302,15 +301,15 @@ class TestAdaptiveOverlayCompositing:
             overlay.update_text_amplitude(10.0)
 
             text_r, text_g, text_b, _ = mod.NSColor.colorWithSRGBRed_green_blue_alpha_.call_args_list[0][0]
-            assert text_r == pytest.approx(1.0)
-            assert text_g == pytest.approx(1.0)
-            assert text_b == pytest.approx(1.0)
+            assert text_r == pytest.approx(0.0)
+            assert text_g == pytest.approx(0.0)
+            assert text_b == pytest.approx(0.0)
         finally:
             sys.modules.pop("spoke.overlay", None)
 
     def test_smoothed_amplitude_responds_to_input(self, mock_pyobjc):
         """The smoothed amplitude should track input — low at silence, high when speaking.
-        The consumer stores the smoothed value; House uses it via the audio_rms signal."""
+        The consumer stores the smoothed value even while the SDF fill is disabled."""
         sys.modules.pop("spoke.overlay", None)
         mod = importlib.import_module("spoke.overlay")
         try:
@@ -338,7 +337,7 @@ class TestAdaptiveOverlayCompositing:
         finally:
             sys.modules.pop("spoke.overlay", None)
 
-    def test_same_appearance_reuses_fill_image(self, mock_pyobjc, monkeypatch):
+    def test_fillless_preview_skips_fill_image_generation(self, mock_pyobjc, monkeypatch):
         sys.modules.pop("spoke.overlay", None)
         mod = importlib.import_module("spoke.overlay")
         try:
@@ -357,11 +356,13 @@ class TestAdaptiveOverlayCompositing:
             overlay._apply_ridge_masks(600.0, 80.0)
             overlay._apply_ridge_masks(600.0, 80.0)
 
-            assert call_count == 1
+            assert call_count == 0
+            overlay._fill_layer.setOpacity_.assert_called_with(0.0)
+            overlay._fill_layer.setContents_.assert_called_with(None)
         finally:
             sys.modules.pop("spoke.overlay", None)
 
-    def test_fill_generation_is_not_run_synchronously(self, mock_pyobjc, monkeypatch):
+    def test_fillless_preview_does_not_queue_fill_generation(self, mock_pyobjc, monkeypatch):
         sys.modules.pop("spoke.overlay", None)
         mod = importlib.import_module("spoke.overlay")
         try:
@@ -378,24 +379,24 @@ class TestAdaptiveOverlayCompositing:
 
             overlay._apply_ridge_masks(600.0, 80.0)
 
-            assert len(queued) == 1
+            assert len(queued) == 0
         finally:
             sys.modules.pop("spoke.overlay", None)
 
-    def test_text_color_contrasts_with_fill(self, mock_pyobjc):
-        """Text should be dark on light fill (dark bg) and white on dark fill (light bg)."""
+    def test_text_color_contrasts_with_background_without_fill(self, mock_pyobjc):
+        """Text should be white on dark backgrounds and dark on light backgrounds."""
         sys.modules.pop("spoke.overlay", None)
         mod = importlib.import_module("spoke.overlay")
         try:
-            # Dark background → light fill → dark text
+            # Dark background → white text.
             overlay = self._make_overlay(mod)
             overlay.set_brightness(0.0, immediate=True)
             mod.NSColor.colorWithSRGBRed_green_blue_alpha_.reset_mock()
             overlay.update_text_amplitude(10.0)
             text_r = mod.NSColor.colorWithSRGBRed_green_blue_alpha_.call_args_list[0][0][0]
-            assert text_r < 0.1  # dark text
+            assert text_r > 0.9
 
-            # Light background → dark fill → white text (ease-out snap converges).
+            # Light background → dark text (ease-out snap converges).
             # Reset mock once before the loop so we capture all distinct allocations
             # during convergence without per-iteration resets stomping the record.
             # The color cache means not every tick allocates a new NSColor — we
@@ -413,7 +414,6 @@ class TestAdaptiveOverlayCompositing:
                 if abs(c[0][0] - c[0][1]) < 0.01 and abs(c[0][1] - c[0][2]) < 0.01
             ]
             assert lum_calls, "expected at least one grayscale base-color allocation"
-            # The last distinct allocation must be near-white (converged at brightness=1.0)
-            assert lum_calls[-1] > 0.9  # white text
+            assert lum_calls[-1] < 0.1
         finally:
             sys.modules.pop("spoke.overlay", None)

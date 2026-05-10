@@ -95,6 +95,7 @@ _TEXT_AMP_SATURATION = _env("SPOKE_TEXT_AMP_SATURATION", 0.05)  # sensitive but 
 _BG_ALPHA_MIN = _env("SPOKE_BG_ALPHA_MIN", 0.08)
 _BG_ALPHA_MAX = _env("SPOKE_BG_ALPHA_MAX", 0.96)
 _BG_AMP_SATURATION = _env("SPOKE_BG_AMP_SATURATION", 0.17)
+_PREVIEW_SDF_FILL_ENABLED = _env("SPOKE_PREVIEW_SDF_FILL_ENABLED", 0.0) >= 0.5
 _SMOOTH_RISE = _env("SPOKE_SMOOTH_RISE", 0.10)
 _SMOOTH_DECAY = _env("SPOKE_SMOOTH_DECAY", 0.957)
 _DARK_FILL_ADDITIVE_THRESHOLD = 0.15
@@ -699,6 +700,8 @@ class TranscriptionOverlay(NSObject):
             x_squeeze=tuning["x_squeeze"],
             y_squeeze=tuning["y_squeeze"],
             cleanup_blur_radius_points=tuning["cleanup_blur_radius_points"],
+            gpu_material_enabled=1.0 if _PREVIEW_SDF_FILL_ENABLED else 0.0,
+            gpu_material_opacity=1.0 if _PREVIEW_SDF_FILL_ENABLED else 0.0,
             debug_visualize=False,
             debug_grid_spacing_points=18.0,
         )
@@ -741,10 +744,13 @@ class TranscriptionOverlay(NSObject):
             width=float(geometry.content_width_points),
             height=float(geometry.content_height_points),
         )
-        rms = float(getattr(self, "_text_amplitude", 0.0))
-        signals = (
-            OpticalFieldSignal(name="audio_rms", value=rms),
-        )
+        if _PREVIEW_SDF_FILL_ENABLED:
+            rms = float(getattr(self, "_text_amplitude", 0.0))
+            signals = (
+                OpticalFieldSignal(name="audio_rms", value=rms),
+            )
+        else:
+            signals = ()
         return OpticalFieldRequest(
             caller_id="preview.transcription",
             bounds=bounds,
@@ -863,7 +869,9 @@ class TranscriptionOverlay(NSObject):
             # Content view stays transparent; reset the fill layer opacity
             self._content_view.layer().setBackgroundColor_(None)
             if hasattr(self, '_fill_layer') and self._fill_layer is not None:
-                self._fill_layer.setOpacity_(_BG_ALPHA_MIN)
+                self._fill_layer.setOpacity_(
+                    _BG_ALPHA_MIN if _PREVIEW_SDF_FILL_ENABLED else 0.0
+                )
         self._cancel_fade()
         self._cancel_typewriter()
         self._visible = True
@@ -873,7 +881,9 @@ class TranscriptionOverlay(NSObject):
         self._typewriter_hwm = 0  # furthest position typewriter has reached
         self._set_text_view_content("")
         self._content_view.layer().setBackgroundColor_(None)
-        self._clear_fill_override(opacity=_BG_ALPHA_MIN)
+        self._clear_fill_override(
+            opacity=_BG_ALPHA_MIN if _PREVIEW_SDF_FILL_ENABLED else 0.0
+        )
 
         # Reset to default size (window includes feather margin)
         screen_frame = self._screen.frame()
@@ -1214,11 +1224,16 @@ class TranscriptionOverlay(NSObject):
             _TEXT_ANCHOR_ALPHA = _lerp(0.80, 1.0, scaled)
         else:
             _TEXT_ANCHOR_ALPHA = 0.88
-        # Text contrasts against the fill: light fill (dark bg) → dark text,
-        # dark fill (light bg) → white text.
-        bg_r, bg_g, bg_b = _lerp_color(_BG_COLOR_DARK, _BG_COLOR_LIGHT, t)
-        bg_lum = 0.299 * bg_r + 0.587 * bg_g + 0.114 * bg_b
-        target_text_lum = 0.0 if bg_lum > 0.5 else 1.0
+        if _PREVIEW_SDF_FILL_ENABLED:
+            # Text contrasts against the fill: light fill (dark bg) → dark
+            # text, dark fill (light bg) → white text.
+            bg_r, bg_g, bg_b = _lerp_color(_BG_COLOR_DARK, _BG_COLOR_LIGHT, t)
+            bg_lum = 0.299 * bg_r + 0.587 * bg_g + 0.114 * bg_b
+            target_text_lum = 0.0 if bg_lum > 0.5 else 1.0
+        else:
+            # Fillless smoke: text contrasts directly against the warped
+            # desktop/content underneath it.
+            target_text_lum = 1.0 if t <= 0.5 else 0.0
 
         # Ease-out snap: chase the target with a fast-start, slow-finish curve.
         # ~200ms at 60Hz = ~12 frames.  The ease-out makes the snap feel
@@ -1343,6 +1358,23 @@ class TranscriptionOverlay(NSObject):
         scale = getattr(self, '_ridge_scale', 2.0)
         total_w = width + 2 * f
         total_h = height + 2 * f
+        if (
+            not _PREVIEW_SDF_FILL_ENABLED
+            and getattr(self, "_fill_override_rgb", None) is None
+            and not getattr(self, "_tray_mode", False)
+            and not getattr(self, "_recovery_mode", False)
+        ):
+            if hasattr(self, "_fill_layer") and self._fill_layer is not None:
+                self._fill_layer.setFrame_(((0, 0), (total_w, total_h)))
+                self._fill_layer.setOpacity_(0.0)
+                if hasattr(self._fill_layer, "setContents_"):
+                    self._fill_layer.setContents_(None)
+            self._desired_fill_image_signature = None
+            self._pending_fill_image_signature = None
+            self._queued_fill_request = None
+            self._fill_payload = None
+            self._fill_image_signature = None
+            return
 
         geom_key = (width, height, scale)
         brightness = getattr(self, "_brightness", 0.0)
@@ -1424,6 +1456,19 @@ class TranscriptionOverlay(NSObject):
         self._apply_ridge_masks(content_width, content_height)
 
     def fillImageReady_(self, payload: dict) -> None:
+        if (
+            not _PREVIEW_SDF_FILL_ENABLED
+            and getattr(self, "_fill_override_rgb", None) is None
+            and not getattr(self, "_tray_mode", False)
+            and not getattr(self, "_recovery_mode", False)
+        ):
+            if hasattr(self, "_fill_layer") and self._fill_layer is not None:
+                self._fill_layer.setOpacity_(0.0)
+                if hasattr(self._fill_layer, "setContents_"):
+                    self._fill_layer.setContents_(None)
+            self._pending_fill_image_signature = None
+            self._queued_fill_request = None
+            return
         signature = payload.get("signature")
         if getattr(self, "_pending_fill_image_signature", None) == signature:
             self._pending_fill_image_signature = None

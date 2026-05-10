@@ -406,16 +406,12 @@ def test_amplitude_does_not_trigger_fill_image_rebuild(mock_pyobjc, monkeypatch)
     )
 
 
-# ── Test: materialize snapshot must carry audio_rms signal name ──────
+# ── Test: fillless preview must not emit material-driving signals ──────
 
 
-def test_preview_snapshot_carries_audio_rms_signal(mock_pyobjc, monkeypatch):
-    """When preview publishes a compositor snapshot with live audio, the
-    optical field request should carry an audio_rms signal rather than
-    the consumer directly driving fill opacity.
-
-    This test will fail until the contract adds audio_rms as a signal
-    and the preview consumer emits it.
+def test_preview_snapshot_omits_fill_material_signals(mock_pyobjc, monkeypatch):
+    """Fillless preview smoke keeps the warp lifecycle but does not publish
+    material-driving signals that would re-enable the GPU fill.
     """
     overlay_module = _import_overlay(mock_pyobjc)
     overlay = _make_overlay(overlay_module, monkeypatch)
@@ -437,11 +433,47 @@ def test_preview_snapshot_carries_audio_rms_signal(mock_pyobjc, monkeypatch):
     snapshot = host.clients["preview.transcription"].published[-1]
     optical_field = dict(snapshot.optical_field)
 
-    # The optical field should carry signal metadata for audio_rms
     signals = optical_field.get("signals", ())
     signal_names = {s.get("name") if isinstance(s, dict) else getattr(s, "name", None)
                     for s in signals}
-    assert "audio_rms" in signal_names, (
-        "preview optical field must carry an audio_rms signal — "
-        "consumer provides amplitude data, House owns how it maps to fill/material"
+    assert "audio_rms" not in signal_names, (
+        "fillless preview must not publish audio_rms into the optical field — "
+        "the placeholder compiler treats material signals as GPU fill authority"
     )
+    assert snapshot.material.gpu_material_enabled == pytest.approx(0.0)
+    assert snapshot.material.gpu_material_opacity == pytest.approx(0.0)
+
+
+# ── Test: fillless preview text must contrast against the background ──
+
+
+def test_preview_fillless_text_inverts_background_polarity(mock_pyobjc, monkeypatch):
+    """Without the SDF fill, preview text should contrast with the world
+    behind it: white on dark backgrounds, dark on light backgrounds.
+    """
+    overlay_module = _import_overlay(mock_pyobjc)
+    overlay = _make_overlay(overlay_module, monkeypatch)
+    host = _FakeHost()
+    overlay.set_compositor_registry(_FakeRegistry(host))
+    overlay._visible = True
+
+    overlay.set_brightness(0.0, immediate=True)
+    overlay_module.NSColor.colorWithSRGBRed_green_blue_alpha_.reset_mock()
+    overlay.update_text_amplitude(10.0)
+    dark_bg_r, dark_bg_g, dark_bg_b, _ = (
+        overlay_module.NSColor.colorWithSRGBRed_green_blue_alpha_.call_args_list[0][0]
+    )
+    assert dark_bg_r > 0.9 and dark_bg_g > 0.9 and dark_bg_b > 0.9
+
+    overlay.set_brightness(1.0, immediate=True)
+    overlay_module.NSColor.colorWithSRGBRed_green_blue_alpha_.reset_mock()
+    for _ in range(20):
+        overlay.update_text_amplitude(10.0)
+    calls = overlay_module.NSColor.colorWithSRGBRed_green_blue_alpha_.call_args_list
+    lum_calls = [
+        c[0][0]
+        for c in calls
+        if abs(c[0][0] - c[0][1]) < 0.01 and abs(c[0][1] - c[0][2]) < 0.01
+    ]
+    assert lum_calls
+    assert lum_calls[-1] < 0.1
