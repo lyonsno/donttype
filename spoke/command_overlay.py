@@ -3363,7 +3363,7 @@ class CommandOverlay(NSObject):
                 self._reset_backdrop_layer()
                 if self._backdrop_renderer is not None and hasattr(self._backdrop_renderer, "stop_live_stream"):
                     self._backdrop_renderer.stop_live_stream()
-                self._stop_fullscreen_compositor()
+                self._stop_fullscreen_compositor(preserve_agent_shell_cards=True)
                 self._window.orderOut_(None)
                 self._cancel_pulse()  # now kill the pulse
             else:
@@ -5568,12 +5568,14 @@ class CommandOverlay(NSObject):
         except Exception:
             logger.debug("Failed to update punch-through mask", exc_info=True)
 
-    def _stop_fullscreen_compositor(self):
+    def _stop_fullscreen_compositor(self, *, preserve_agent_shell_cards: bool = False):
         self._cancel_materialization_animation()
         self._cancel_dismiss_pucker_tail_animation()
         compositor = getattr(self, "_fullscreen_compositor", None)
         self._fullscreen_compositor = None
         self._enable_text_punchthrough(False)
+        if not preserve_agent_shell_cards:
+            self._release_agent_shell_card_clients(set())
         # Unhide the old backdrop layer in case the old path resumes
         backdrop = getattr(self, "_backdrop_layer", None)
         if backdrop is not None:
@@ -5583,6 +5585,17 @@ class CommandOverlay(NSObject):
                 pass
         if compositor is not None:
             try:
+                if preserve_agent_shell_cards and getattr(self, "_agent_shell_card_clients", None):
+                    shell_config = self._display_local_optical_shell_config()
+                    if shell_config is None:
+                        shell_config = self._current_optical_shell_config()
+                    if shell_config is not None:
+                        hidden_config = _without_agent_shell_card_optical_fields(shell_config)
+                        if hidden_config is not None:
+                            hidden_config = dict(hidden_config)
+                            hidden_config["visible"] = False
+                            compositor.update_shell_config(hidden_config)
+                            return
                 compositor.stop()
             except Exception:
                 logger.debug("Failed to stop full-screen compositor", exc_info=True)

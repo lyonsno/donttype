@@ -3814,6 +3814,52 @@ class TestAdaptiveCompositing:
         assert card_client.configs[-1]["text"]["primary"] == "Codex lane"
         assert "agent_shell_card_optical_fields" not in compositor.parent_configs[-1]
 
+    def test_stop_fullscreen_compositor_can_preserve_agent_shell_card_clients(
+        self, mock_pyobjc, monkeypatch
+    ):
+        overlay, _mod = _make_overlay(mock_pyobjc)
+
+        class FakeAssistantClient:
+            def __init__(self):
+                self.configs = []
+                self.stopped = False
+
+            def update_shell_config(self, config):
+                self.configs.append(dict(config))
+                return True
+
+            def stop(self):
+                self.stopped = True
+
+        class FakeCardClient:
+            def __init__(self):
+                self.released = False
+
+            def release(self):
+                self.released = True
+
+        assistant = FakeAssistantClient()
+        card = FakeCardClient()
+        overlay._fullscreen_compositor = assistant
+        overlay._agent_shell_card_clients = {"agent.card.codex-thread-1": card}
+        overlay._agent_shell_card_client_identities = {"agent.card.codex-thread-1": object()}
+        overlay._display_local_optical_shell_config = MagicMock(
+            return_value={
+                "client_id": "assistant.command",
+                "visible": True,
+                "content_width_points": 600.0,
+                "content_height_points": 140.0,
+            }
+        )
+
+        overlay._stop_fullscreen_compositor(preserve_agent_shell_cards=True)
+
+        assert assistant.configs[-1]["visible"] is False
+        assert not assistant.stopped
+        assert not card.released
+        assert overlay._agent_shell_card_clients == {"agent.card.codex-thread-1": card}
+        assert overlay._fullscreen_compositor is None
+
     def test_replace_transcript_updates_agent_shell_primitives(
         self, mock_pyobjc, monkeypatch
     ):
