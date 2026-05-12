@@ -302,11 +302,16 @@ kernel vec2 opticalShellWarp(
         normalSrc = d + capsuleN * pushAmount;
     }
 
-    // Smoke-only witness: left half is current trunk exterior magnification,
-    // right half is the 1f3e7eac capsule-normal exterior push.
+    // Smoke-only witness: upper-left and lower-right quadrants use current trunk
+    // exterior magnification; lower-left and upper-right use the 1f3e7eac
+    // capsule-normal exterior push. Core Image coordinates are bottom-left
+    // origin, so ``upper`` means y >= half-height here.
     vec2 src = normalSrc;
     if (superpositionSplit >= 0.5) {
-        src = d.x < width * 0.5 ? trunkSrc : normalSrc;
+        float leftQuadrant = d.x < width * 0.5 ? 1.0 : 0.0;
+        float upperQuadrant = d.y >= height * 0.5 ? 1.0 : 0.0;
+        float trunkQuadrant = abs(leftQuadrant - upperQuadrant) < 0.5 ? 1.0 : 0.0;
+        src = trunkQuadrant > 0.5 ? trunkSrc : normalSrc;
     }
     src = clamp(src, vec2(0.0, 0.0), vec2(width, height));
     return src;

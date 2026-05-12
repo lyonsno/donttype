@@ -360,6 +360,9 @@ _COMMAND_BACKDROP_OPTICAL_SHELL_SPRING_OPACITY_SCALE = _env(
 _COMMAND_BACKDROP_OPTICAL_SHELL_DEBUG_REVEAL = _env_bool(
     "SPOKE_COMMAND_BACKDROP_OPTICAL_SHELL_DEBUG_REVEAL", False
 )
+_COMMAND_BACKDROP_OPTICAL_SHELL_DISABLE_SDF_FILL = _env_bool(
+    "SPOKE_COMMAND_BACKDROP_OPTICAL_SHELL_DISABLE_SDF_FILL", False
+)
 _COMMAND_BACKDROP_OPTICAL_SHELL_DEBUG_VISUALIZE = _env_bool(
     "SPOKE_COMMAND_BACKDROP_OPTICAL_SHELL_DEBUG_VISUALIZE", False
 )
@@ -1899,6 +1902,8 @@ class CommandOverlay(NSObject):
         self._fill_layer = CALayer.alloc().init()
         self._fill_layer.setFrame_(((0, 0), (win_w, win_h)))
         self._fill_layer.setContentsGravity_("resize")
+        if _COMMAND_BACKDROP_OPTICAL_SHELL_DISABLE_SDF_FILL:
+            self._fill_layer.setOpacity_(0.0)
 
         # Boost layer — white, sits below the fill.  When punch-through
         # is active on dark backgrounds, this layer brightens the warped
@@ -3333,7 +3338,10 @@ class CommandOverlay(NSObject):
                     _COMMAND_BACKDROP_OPTICAL_SHELL_FILL_MAX_LIGHT,
                     t,
                 )
-                if _COMMAND_BACKDROP_OPTICAL_SHELL_DEBUG_REVEAL:
+                if (
+                    _COMMAND_BACKDROP_OPTICAL_SHELL_DEBUG_REVEAL
+                    or _COMMAND_BACKDROP_OPTICAL_SHELL_DISABLE_SDF_FILL
+                ):
                     fill_min = 0.0
                     fill_max = 0.0
                 elif getattr(self, "_fullscreen_compositor", None) is not None:
@@ -3934,6 +3942,10 @@ class CommandOverlay(NSObject):
             # earlier amputates the center while leaving warped end-caps alive.
             state = _dismiss_materialization_fill_state(progress)
             hide_material_layers = state["opacity"] <= 0.0
+        if _COMMAND_BACKDROP_OPTICAL_SHELL_DISABLE_SDF_FILL:
+            state = dict(state)
+            state["opacity"] = 0.0
+            hide_material_layers = True
         try:
             content_frame = content.frame()
             f = _OPTICAL_SHELL_FEATHER if _COMMAND_BACKDROP_OPTICAL_SHELL_ENABLED else _OUTER_FEATHER
@@ -4606,6 +4618,8 @@ class CommandOverlay(NSObject):
         if hasattr(self, '_fill_layer') and self._fill_layer is not None:
             self._fill_layer.setContents_(fill_image)
             self._fill_layer.setFrame_(((0, 0), (total_w, total_h)))
+            if _COMMAND_BACKDROP_OPTICAL_SHELL_DISABLE_SDF_FILL:
+                self._fill_layer.setOpacity_(0.0)
             if hasattr(self._fill_layer, "setContentsScale_"):
                 self._fill_layer.setContentsScale_(scale)
             if hasattr(self._fill_layer, "setCompositingFilter_"):

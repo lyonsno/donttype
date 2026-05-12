@@ -1067,6 +1067,21 @@ class TestOpticalShellMaterialization:
         overlay._fill_layer.setOpacity_.assert_called()
         assert overlay._window.setAlphaValue_.call_args is None
 
+    def test_smoke_disable_sdf_fill_env_forces_material_fill_opacity_zero(
+        self, mock_pyobjc, monkeypatch
+    ):
+        monkeypatch.setenv("SPOKE_COMMAND_BACKDROP_OPTICAL_SHELL_DISABLE_SDF_FILL", "1")
+        overlay, mod = _make_overlay(mock_pyobjc)
+        overlay._fullscreen_compositor = MagicMock()
+        overlay._materialization_timer = MagicMock()
+        overlay._materialization_direction = 1
+        overlay._content_view.frame.return_value = _make_rect(28.0, 28.0, 624.0, 104.0)
+
+        overlay._apply_materialization_fill_state(1.0)
+
+        overlay._fill_layer.setOpacity_.assert_called_with(0.0)
+        assert mod._COMMAND_BACKDROP_OPTICAL_SHELL_DISABLE_SDF_FILL is True
+
     def test_optical_fade_out_keeps_window_opaque_until_reverse_collapse_finishes(
         self, mock_pyobjc
     ):

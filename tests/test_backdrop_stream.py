@@ -1551,8 +1551,10 @@ def test_optical_shell_kernel_contains_superposition_split_witness():
     source = mod._SHELL_WARP_KERNEL_SOURCE
 
     assert "float superpositionSplit" in source
-    assert "left half is current trunk exterior magnification" in source
-    assert "d.x < width * 0.5 ? trunkSrc : normalSrc" in source
+    assert "upper-left and lower-right quadrants use current trunk" in source
+    assert "float leftQuadrant = d.x < width * 0.5 ? 1.0 : 0.0;" in source
+    assert "float upperQuadrant = d.y >= height * 0.5 ? 1.0 : 0.0;" in source
+    assert "src = trunkQuadrant > 0.5 ? trunkSrc : normalSrc;" in source
 
 
 def test_apply_optical_shell_warp_passes_superposition_split_from_config(monkeypatch):
