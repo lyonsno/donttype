@@ -278,6 +278,114 @@ def test_quartz_backdrop_renderer_blurs_snapshot_before_render(mock_pyobjc, monk
     context.createCGImage_fromRect_.assert_called_once()
 
 
+def test_quartz_backdrop_renderer_does_not_ci_warp_without_debug_opt_in(
+    mock_pyobjc, monkeypatch
+):
+    sys.modules.pop("spoke.command_overlay", None)
+    mod = importlib.import_module("spoke.command_overlay")
+    monkeypatch.setattr(mod, "_COMMAND_BACKDROP_OPTICAL_SHELL_ENABLED", True)
+    monkeypatch.setattr(mod, "_COMMAND_BACKDROP_ALLOW_CI_WARP_FALLBACK", False)
+    warp = MagicMock(side_effect=lambda image, _extent, _config: image)
+    monkeypatch.setattr(mod, "_apply_optical_shell_warp_ci_image", warp)
+    quartz = sys.modules["Quartz"]
+
+    class FakeImage:
+        def __init__(self):
+            self._extent = _make_rect(0.0, 0.0, 680.0, 160.0)
+
+        def extent(self):
+            return self._extent
+
+        def imageByClampingToExtent(self):
+            return self
+
+        def imageByCroppingToRect_(self, _rect):
+            return self
+
+    class FakeCIImage:
+        @staticmethod
+        def imageWithCGImage_(_image):
+            return FakeImage()
+
+    class FakeCIFilter:
+        @staticmethod
+        def filterWithName_(_name):
+            return None
+
+    quartz.CGWindowListCreateImage = MagicMock(return_value="sharp-snapshot")
+    quartz.kCGWindowListOptionOnScreenBelowWindow = 2
+    quartz.CIImage = FakeCIImage
+    quartz.CIFilter = FakeCIFilter
+
+    renderer = mod._QuartzBackdropRenderer()
+    context = MagicMock()
+    context.createCGImage_fromRect_.return_value = "simple-snapshot"
+    renderer._context = MagicMock(return_value=context)
+
+    image = renderer.capture_blurred_image(
+        window_number=17,
+        capture_rect=_make_rect(100.0, 200.0, 680.0, 160.0),
+        blur_radius_points=0.0,
+    )
+
+    assert image == "simple-snapshot"
+    warp.assert_not_called()
+
+
+def test_quartz_backdrop_renderer_allows_ci_warp_for_explicit_debug_opt_in(
+    mock_pyobjc, monkeypatch
+):
+    sys.modules.pop("spoke.command_overlay", None)
+    mod = importlib.import_module("spoke.command_overlay")
+    monkeypatch.setattr(mod, "_COMMAND_BACKDROP_OPTICAL_SHELL_ENABLED", True)
+    monkeypatch.setattr(mod, "_COMMAND_BACKDROP_ALLOW_CI_WARP_FALLBACK", True)
+    warp = MagicMock(side_effect=lambda image, _extent, _config: image)
+    monkeypatch.setattr(mod, "_apply_optical_shell_warp_ci_image", warp)
+    quartz = sys.modules["Quartz"]
+
+    class FakeImage:
+        def __init__(self):
+            self._extent = _make_rect(0.0, 0.0, 680.0, 160.0)
+
+        def extent(self):
+            return self._extent
+
+        def imageByClampingToExtent(self):
+            return self
+
+        def imageByCroppingToRect_(self, _rect):
+            return self
+
+    class FakeCIImage:
+        @staticmethod
+        def imageWithCGImage_(_image):
+            return FakeImage()
+
+    class FakeCIFilter:
+        @staticmethod
+        def filterWithName_(_name):
+            return None
+
+    quartz.CGWindowListCreateImage = MagicMock(return_value="sharp-snapshot")
+    quartz.kCGWindowListOptionOnScreenBelowWindow = 2
+    quartz.CIImage = FakeCIImage
+    quartz.CIFilter = FakeCIFilter
+
+    renderer = mod._QuartzBackdropRenderer()
+    context = MagicMock()
+    context.createCGImage_fromRect_.return_value = "warped-snapshot"
+    renderer._context = MagicMock(return_value=context)
+
+    image = renderer.capture_blurred_image(
+        window_number=17,
+        capture_rect=_make_rect(100.0, 200.0, 680.0, 160.0),
+        blur_radius_points=0.0,
+    )
+
+    assert image == "warped-snapshot"
+    warp.assert_called_once()
+
+
 class _FakeLayoutManager:
     def __init__(self, height):
         self.height = height
@@ -2660,6 +2768,51 @@ class TestWindowLayering:
 
         overlay._start_fullscreen_compositor.assert_called_once()
         overlay._refresh_punchthrough_mask_if_needed.assert_called_once()
+
+    def test_failed_optical_compositor_uses_simple_backdrop_without_ci_warp(
+        self, mock_pyobjc, monkeypatch
+    ):
+        overlay, mod = _make_overlay(mock_pyobjc)
+        monkeypatch.setattr(mod, "_COMMAND_BACKDROP_ALLOW_CI_WARP_FALLBACK", False)
+        overlay._backdrop_renderer = MagicMock()
+        overlay._backdrop_renderer.capture_blurred_image.return_value = "simple-image"
+        overlay._backdrop_layer = MagicMock()
+        overlay._update_backdrop_capture_geometry = MagicMock(
+            return_value=(_make_rect(0.0, 0.0, 680.0, 160.0), (680, 160))
+        )
+        overlay._current_optical_shell_config = MagicMock(
+            return_value={"cleanup_blur_radius_points": 0.2}
+        )
+        overlay._window.windowNumber.return_value = 42
+        overlay._update_backdrop_mask = MagicMock()
+
+        overlay._refresh_backdrop_snapshot()
+
+        overlay._backdrop_renderer.set_live_optical_shell_config.assert_called_once_with(None)
+        overlay._backdrop_renderer.capture_blurred_image.assert_called_once()
+        overlay._backdrop_layer.setContents_.assert_called_once_with("simple-image")
+
+    def test_debug_opt_in_preserves_ci_warp_config_for_local_backdrop(
+        self, mock_pyobjc, monkeypatch
+    ):
+        overlay, mod = _make_overlay(mock_pyobjc)
+        monkeypatch.setattr(mod, "_COMMAND_BACKDROP_ALLOW_CI_WARP_FALLBACK", True)
+        shell_config = {"cleanup_blur_radius_points": 0.2}
+        overlay._backdrop_renderer = MagicMock()
+        overlay._backdrop_renderer.capture_blurred_image.return_value = "warped-image"
+        overlay._backdrop_layer = MagicMock()
+        overlay._update_backdrop_capture_geometry = MagicMock(
+            return_value=(_make_rect(0.0, 0.0, 680.0, 160.0), (680, 160))
+        )
+        overlay._current_optical_shell_config = MagicMock(return_value=shell_config)
+        overlay._window.windowNumber.return_value = 42
+        overlay._update_backdrop_mask = MagicMock()
+
+        overlay._refresh_backdrop_snapshot()
+
+        overlay._backdrop_renderer.set_live_optical_shell_config.assert_called_once_with(
+            shell_config
+        )
 
     def test_show_with_initial_transcript_skips_default_shell_fill_build(
         self, mock_pyobjc, monkeypatch

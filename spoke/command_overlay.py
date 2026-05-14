@@ -360,6 +360,9 @@ _COMMAND_BACKDROP_OPTICAL_SHELL_SPRING_OPACITY_SCALE = _env(
 _COMMAND_BACKDROP_OPTICAL_SHELL_DEBUG_REVEAL = _env_bool(
     "SPOKE_COMMAND_BACKDROP_OPTICAL_SHELL_DEBUG_REVEAL", False
 )
+_COMMAND_BACKDROP_ALLOW_CI_WARP_FALLBACK = _env_bool(
+    "SPOKE_COMMAND_BACKDROP_ALLOW_CI_WARP_FALLBACK", False
+)
 _COMMAND_BACKDROP_OPTICAL_SHELL_DEBUG_VISUALIZE = _env_bool(
     "SPOKE_COMMAND_BACKDROP_OPTICAL_SHELL_DEBUG_VISUALIZE", False
 )
@@ -1257,7 +1260,11 @@ class _QuartzBackdropRenderer:
         overscan_points = _command_backdrop_capture_overscan_points()
         content_width_points = max(capture_rect.size.width - 2 * overscan_points, 1.0)
         content_height_points = max(capture_rect.size.height - 2 * overscan_points, 1.0)
-        if _COMMAND_BACKDROP_OPTICAL_SHELL_ENABLED and _COMMAND_BACKDROP_OPTICAL_SHELL_DEBUG_VISUALIZE:
+        if (
+            _COMMAND_BACKDROP_OPTICAL_SHELL_ENABLED
+            and _COMMAND_BACKDROP_ALLOW_CI_WARP_FALLBACK
+            and _COMMAND_BACKDROP_OPTICAL_SHELL_DEBUG_VISUALIZE
+        ):
             context = self._context()
             if context is not None and hasattr(context, "createCGImage_fromRect_"):
                 shell_config = _command_optical_shell_config(
@@ -1342,8 +1349,12 @@ class _QuartzBackdropRenderer:
                             else blurred
                         )
 
-            # Apply optical shell warp to the real backdrop capture.
-            if _COMMAND_BACKDROP_OPTICAL_SHELL_ENABLED:
+            # CI warp is a debug-only fallback. Product optical-shell warp is
+            # Metal; without that surface, keep the local backdrop simple.
+            if (
+                _COMMAND_BACKDROP_OPTICAL_SHELL_ENABLED
+                and _COMMAND_BACKDROP_ALLOW_CI_WARP_FALLBACK
+            ):
                 shell_config = _command_optical_shell_config(
                     content_width_points,
                     content_height_points,
@@ -2117,6 +2128,11 @@ class CommandOverlay(NSObject):
             return _command_optical_shell_config()
         return _command_optical_shell_config(width, height)
 
+    def _local_backdrop_optical_shell_config(self) -> dict[str, float | bool] | None:
+        if not _COMMAND_BACKDROP_ALLOW_CI_WARP_FALLBACK:
+            return None
+        return self._current_optical_shell_config()
+
     def _apply_backdrop_pulse_style(self, breath: float) -> None:
         layer = getattr(self, "_backdrop_layer", None)
         if layer is None:
@@ -2145,13 +2161,16 @@ class CommandOverlay(NSObject):
             base_mask_width_multiplier,
             self._backdrop_blur_drive,
         )
-        if _COMMAND_BACKDROP_OPTICAL_SHELL_DEBUG_VISUALIZE:
+        if (
+            _COMMAND_BACKDROP_OPTICAL_SHELL_DEBUG_VISUALIZE
+            and _COMMAND_BACKDROP_ALLOW_CI_WARP_FALLBACK
+        ):
             mask_width_multiplier = min(
                 mask_width_multiplier,
                 _COMMAND_BACKDROP_OPTICAL_SHELL_DEBUG_MASK_WIDTH_MULTIPLIER,
             )
         renderer = getattr(self, "_backdrop_renderer", None)
-        shell_config = self._current_optical_shell_config()
+        shell_config = self._local_backdrop_optical_shell_config()
         effective_blur_radius_points = blur_radius_points
         if shell_config is not None:
             effective_blur_radius_points = float(
@@ -4921,9 +4940,18 @@ class CommandOverlay(NSObject):
                 self._start_deferred_materialization_if_ready()
                 logger.info("Command overlay: full-screen compositor started")
             else:
-                logger.info("Command overlay: full-screen compositor failed to start")
+                logger.info(
+                    "Command overlay: full-screen compositor failed to start; "
+                    "using simple local backdrop without CI warp "
+                    "(set SPOKE_COMMAND_BACKDROP_ALLOW_CI_WARP_FALLBACK=1 for debug fallback)"
+                )
         except Exception:
-            logger.info("Command overlay: full-screen compositor unavailable", exc_info=True)
+            logger.info(
+                "Command overlay: full-screen compositor unavailable; "
+                "using simple local backdrop without CI warp "
+                "(set SPOKE_COMMAND_BACKDROP_ALLOW_CI_WARP_FALLBACK=1 for debug fallback)",
+                exc_info=True,
+            )
 
     def _enable_text_punchthrough(self, enabled: bool) -> None:
         """Toggle text punch-through mode.
@@ -5178,7 +5206,11 @@ class CommandOverlay(NSObject):
             return
         if self._backdrop_renderer is None or self._backdrop_layer is None:
             return
-        if _COMMAND_BACKDROP_OPTICAL_SHELL_ENABLED and _COMMAND_BACKDROP_OPTICAL_SHELL_DEBUG_VISUALIZE:
+        if (
+            _COMMAND_BACKDROP_OPTICAL_SHELL_ENABLED
+            and _COMMAND_BACKDROP_ALLOW_CI_WARP_FALLBACK
+            and _COMMAND_BACKDROP_OPTICAL_SHELL_DEBUG_VISUALIZE
+        ):
             return
         self._backdrop_timer = NSTimer.scheduledTimerWithTimeInterval_target_selector_userInfo_repeats_(
             _COMMAND_BACKDROP_REFRESH_S,
@@ -5215,12 +5247,17 @@ class CommandOverlay(NSObject):
         except Exception:
             return None
         blur_radius_points = getattr(self, "_backdrop_blur_radius_points", _COMMAND_BACKDROP_BLUR_RADIUS)
-        shell_config = self._current_optical_shell_config()
+        shell_config = self._local_backdrop_optical_shell_config()
         if shell_config is not None and hasattr(self._backdrop_renderer, "set_live_optical_shell_config"):
             try:
                 self._backdrop_renderer.set_live_optical_shell_config(shell_config)
             except Exception:
                 logger.debug("Failed to refresh live command optical-shell config", exc_info=True)
+        elif hasattr(self._backdrop_renderer, "set_live_optical_shell_config"):
+            try:
+                self._backdrop_renderer.set_live_optical_shell_config(None)
+            except Exception:
+                logger.debug("Failed to clear live command optical-shell config", exc_info=True)
         image = self._backdrop_renderer.capture_blurred_image(
             window_number=window_number,
             capture_rect=capture_rect,
@@ -5334,9 +5371,11 @@ class CommandOverlay(NSObject):
                 )
                 self._apply_ridge_masks(_OVERLAY_WIDTH, new_height)
                 self._update_backdrop_capture_geometry()
-                shell_config = self._current_optical_shell_config()
+                shell_config = self._local_backdrop_optical_shell_config()
                 if shell_config is not None and hasattr(self._backdrop_renderer, "set_live_optical_shell_config"):
                     self._backdrop_renderer.set_live_optical_shell_config(shell_config)
+                elif hasattr(self._backdrop_renderer, "set_live_optical_shell_config"):
+                    self._backdrop_renderer.set_live_optical_shell_config(None)
                 compositor = getattr(self, "_fullscreen_compositor", None)
                 display_shell_config = self._display_local_optical_shell_config()
                 if compositor is not None and display_shell_config is not None:
