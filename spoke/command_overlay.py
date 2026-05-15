@@ -2216,7 +2216,8 @@ class CommandOverlay(NSObject):
         )
         self._cancel_all_timers()
         self._reset_fill_generation_latches_for_show()
-        if getattr(self, "_fullscreen_compositor", None) is not None:
+        had_compositor = getattr(self, "_fullscreen_compositor", None) is not None
+        if had_compositor:
             self._stop_fullscreen_compositor(reveal_local_shell=False)
         self._visible = True
         self._streaming = True
@@ -2319,7 +2320,8 @@ class CommandOverlay(NSObject):
             else:
                 self._refresh_punchthrough_mask_if_needed()
         if not optical_shell_start:
-            self._thaw_local_shell_layers()
+            if had_compositor:
+                self._thaw_local_shell_layers()
             self._refresh_backdrop_snapshot()
         self._start_brightness_sampling()
 
@@ -5217,8 +5219,7 @@ class CommandOverlay(NSObject):
         for layer_name in ("_fill_layer", "_boost_layer", "_spring_tint_layer"):
             layer = getattr(self, layer_name, None)
             self._set_layer_opacity_without_actions(layer, 0.0)
-            if layer_name != "_fill_layer":
-                self._set_layer_hidden_without_actions(layer, True)
+            self._set_layer_hidden_without_actions(layer, True)
         scroll = getattr(self, "_scroll_view", None)
         if scroll is not None and hasattr(scroll, "setHidden_"):
             try:
@@ -5235,8 +5236,7 @@ class CommandOverlay(NSObject):
         for layer_name in ("_fill_layer", "_boost_layer", "_spring_tint_layer"):
             layer = getattr(self, layer_name, None)
             self._set_layer_opacity_without_actions(layer, 1.0)
-            if layer_name != "_fill_layer":
-                self._set_layer_hidden_without_actions(layer, False)
+            self._set_layer_hidden_without_actions(layer, False)
         scroll = getattr(self, "_scroll_view", None)
         if scroll is not None and hasattr(scroll, "setHidden_"):
             try:
