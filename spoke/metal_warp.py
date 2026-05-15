@@ -459,13 +459,14 @@ kernel void opticalShellWarp(
     // The warp shell is inflated by capsuleRadius beyond the fill boundary,
     // so blur should only start ramping once we're past that inflation zone
     // (i.e., inside the visible rounded shell).
-    // Allow blur to bleed slightly past the shell boundary to feather
-    // the edge transition, especially at rounded corners where the warp
-    // displacement drops sharply.
-    float edgeFeatherPixels = capsuleRadius * 0.25f;
-    float pixelsInside = -capsuleSdf - capsuleRadius * 0.5f + edgeFeatherPixels;
+    // Push mip onset outward so the blur-to-crisp transition happens
+    // inside a region we control, burying the warp geometry seam under
+    // blur before it becomes visible.
+    float pixelsInside = -capsuleSdf;
     float mipRampPixels = 30.0f * max(1.0f, params.coreMagnification / 4.0f);
-    float baseMipLod = clamp(pixelsInside / mipRampPixels, 0.0f, 1.0f) * 6.0f;
+    float mipT = clamp(pixelsInside / mipRampPixels, 0.0f, 1.0f);
+    mipT = mipT * mipT * (3.0f - 2.0f * mipT);  // smoothstep
+    float baseMipLod = mipT * 6.0f;
     float warpAliasOctaves = max(
         abs(log2(max(abs(scaleX), 1e-4f))),
         abs(log2(max(abs(scaleY), 1e-4f)))
