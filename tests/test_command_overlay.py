@@ -2384,7 +2384,7 @@ class TestWindowLayering:
 
         assert events[:2] == ["stop", "front"]
 
-    def test_show_stops_stale_compositor_without_revealing_old_backdrop(
+    def test_show_stops_stale_compositor_and_thaws_layers_on_fallback(
         self, mock_pyobjc, monkeypatch
     ):
         overlay, mod = _make_overlay(mock_pyobjc)
@@ -2403,9 +2403,43 @@ class TestWindowLayering:
 
         overlay.show(start_thinking_timer=False)
 
-        assert ("backdrop-hidden", False) not in events
         assert events.index("compositor-stop") < events.index("front")
         assert events.index(("alpha", 0.0)) < events.index("front")
+        # Layers are frozen during compositor stop, then thawed for fallback path
+        hidden_events = [h for item in events if isinstance(item, tuple) and len(item) == 2 and item[0] == "backdrop-hidden" for h in [item[1]]]
+        assert True in hidden_events, "backdrop should be frozen (hidden)"
+        assert False in hidden_events, "backdrop should be thawed (unhidden) for fallback"
+        assert hidden_events.index(True) < hidden_events.index(False)
+
+    def test_show_thaws_frozen_layers_when_compositor_fails_to_start(
+        self, mock_pyobjc, monkeypatch
+    ):
+        overlay, mod = _make_overlay(mock_pyobjc)
+        events = []
+        compositor = MagicMock()
+        overlay._fullscreen_compositor = compositor
+        overlay._backdrop_layer.setHidden_.side_effect = (
+            lambda hidden: events.append(("backdrop-hidden", hidden))
+        )
+        overlay._scroll_view.setHidden_.side_effect = (
+            lambda hidden: events.append(("scroll-hidden", hidden))
+        )
+        monkeypatch.setattr(mod, "_COMMAND_BACKDROP_OPTICAL_SHELL_ENABLED", True)
+        # Compositor start will fail — _start_fullscreen_compositor freezes
+        # then fails to create a new compositor, leaving _fullscreen_compositor=None
+        original_start = overlay._start_fullscreen_compositor
+        def failing_start():
+            overlay._stop_fullscreen_compositor(reveal_local_shell=False)
+            # Simulate compositor creation failing — leave it as None
+        overlay._start_fullscreen_compositor = failing_start
+
+        overlay.show(start_thinking_timer=False)
+
+        # Layers should be thawed after compositor fails
+        backdrop_hidden = [item[1] for item in events if isinstance(item, tuple) and len(item) == 2 and item[0] == "backdrop-hidden"]
+        assert False in backdrop_hidden, "backdrop must be thawed when compositor fails"
+        scroll_hidden = [item[1] for item in events if isinstance(item, tuple) and len(item) == 2 and item[0] == "scroll-hidden"]
+        assert False in scroll_hidden, "scroll_view must be thawed when compositor fails"
 
     def test_show_clears_attributed_text_storage_before_reuse(self, mock_pyobjc):
         overlay, _ = _make_overlay(mock_pyobjc)

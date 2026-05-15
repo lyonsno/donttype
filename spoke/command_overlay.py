@@ -2303,12 +2303,16 @@ class CommandOverlay(NSObject):
             # deferred compositor can otherwise expose a naked pre-warp frame.
             self._start_fullscreen_compositor()
             if getattr(self, "_fullscreen_compositor", None) is None:
+                # Compositor failed to start — restore frozen fallback layers
+                # so the AppKit local shell is visible.
+                self._thaw_local_shell_layers()
                 if known_content_optical_start:
                     self._enable_text_punchthrough(False)
                 self._start_backdrop_refresh_timer()
             else:
                 self._refresh_punchthrough_mask_if_needed()
         if not optical_shell_start:
+            self._thaw_local_shell_layers()
             self._refresh_backdrop_snapshot()
         self._start_brightness_sampling()
 
@@ -5141,6 +5145,24 @@ class CommandOverlay(NSObject):
                 scroll.setHidden_(True)
             except Exception:
                 logger.debug("Failed to hide command scroll layer for compositor handoff", exc_info=True)
+
+    def _thaw_local_shell_layers(self) -> None:
+        """Restore fallback AppKit layers after a compositor handoff freeze."""
+        self._set_layer_hidden_without_actions(
+            getattr(self, "_backdrop_layer", None),
+            False,
+        )
+        for layer_name in ("_fill_layer", "_boost_layer", "_spring_tint_layer"):
+            layer = getattr(self, layer_name, None)
+            self._set_layer_opacity_without_actions(layer, 1.0)
+            if layer_name != "_fill_layer":
+                self._set_layer_hidden_without_actions(layer, False)
+        scroll = getattr(self, "_scroll_view", None)
+        if scroll is not None and hasattr(scroll, "setHidden_"):
+            try:
+                scroll.setHidden_(False)
+            except Exception:
+                logger.debug("Failed to unhide command scroll layer after compositor handoff", exc_info=True)
 
     def _stop_fullscreen_compositor(self, *, reveal_local_shell: bool = True):
         self._cancel_materialization_animation()
