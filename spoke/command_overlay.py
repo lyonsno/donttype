@@ -4175,7 +4175,8 @@ class CommandOverlay(NSObject):
         ):
             fill_layer = getattr(self, "_fill_layer", None)
             if fill_layer is not None and hasattr(fill_layer, "setHidden_"):
-                fill_layer.setHidden_(False)
+                if getattr(self, "_fullscreen_compositor", None) is None:
+                    fill_layer.setHidden_(False)
             self._fill_hidden_until_signature = None
             record_command_overlay_trace(
                 "overlay.fill_ready.recovered_hidden_latch",
@@ -4421,7 +4422,11 @@ class CommandOverlay(NSObject):
             return
         fill_layer = getattr(self, "_fill_layer", None)
         if fill_layer is not None and hasattr(fill_layer, "setHidden_"):
-            fill_layer.setHidden_(False)
+            # Only unhide the fill layer if the compositor is not rendering.
+            # When the compositor is active, the fill layer stays hidden to
+            # prevent the rectangular AppKit layer from flashing through.
+            if getattr(self, "_fullscreen_compositor", None) is None:
+                fill_layer.setHidden_(False)
         self._fill_hidden_until_signature = None
         self._start_deferred_materialization_if_ready()
 
