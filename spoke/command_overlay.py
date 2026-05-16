@@ -2400,6 +2400,8 @@ class CommandOverlay(NSObject):
 
     def _entrancePopStep_(self, timer) -> None:
         """Ease the entrance pop back to scale 1.0."""
+        if getattr(self, "_pop_timer", None) is not timer:
+            return
         self._pop_step += 1
         t = self._pop_step / self._pop_steps
         eased = t * t * (3.0 - 2.0 * t)  # smoothstep
@@ -2445,6 +2447,8 @@ class CommandOverlay(NSObject):
 
     def _cancelAnimStep_(self, timer) -> None:
         """Animate the dismiss sequence: grow for 60ms, then shrink and fade."""
+        if getattr(self, "_cancel_timer_anim", None) is not timer:
+            return
         self._cancel_elapsed += 1.0 / _DISMISS_ANIM_FPS
         phase, scale, alpha, done = _dismiss_animation_state(self._cancel_elapsed)
         self._cancel_phase = phase
@@ -2933,6 +2937,8 @@ class CommandOverlay(NSObject):
         During fade-out, the utterance text fades at double rate so it
         disappears before the assistant response.
         """
+        if getattr(self, "_fade_timer", None) is not timer:
+            return
         self._fade_step += 1
         progress = self._fade_step / _FADE_STEPS
 
@@ -2987,13 +2993,9 @@ class CommandOverlay(NSObject):
                 self._window.setAlphaValue_(1.0)
 
     def pulseStep_(self, timer) -> None:
-        """Dual-phase pulse: user and assistant text breathe independently.
-
-        Assistant text: faster period (0.8x base), double-smoothstep for
-        extra-aggressive easing, violet-amber color oscillation.
-        User text: slower period (1.5x base), single smoothstep, blue
-        color shift, phase-offset by 0.3 and diverging naturally.
-        """
+        """Dual-phase pulse: user and assistant text breathe independently."""
+        if getattr(self, "_pulse_timer", None) is not timer:
+            return
         try:
             self._pulseStepInner()
         except Exception:

@@ -391,11 +391,12 @@ class TestDismissAnimation:
         overlay._visible = True
         overlay.cancel_dismiss()
 
+        timer = overlay._cancel_timer_anim
         frames_to_duration = math.ceil(
             mod._DISMISS_DURATION_S * mod._DISMISS_ANIM_FPS
         )
         for _ in range(frames_to_duration):
-            overlay._cancelAnimStep_(None)
+            overlay._cancelAnimStep_(timer)
 
         assert overlay._visible is False
         overlay._window.orderOut_.assert_called()
