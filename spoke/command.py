@@ -702,6 +702,45 @@ class CommandClient:
         serialized = json.dumps(tool_result)
         return serialized, serialized
 
+    def _tool_result_image_parts(self, tool_content: Any) -> list[dict[str, Any]]:
+        """Return multimodal image parts from an OpenAI-style tool result."""
+        if not isinstance(tool_content, list):
+            return []
+        image_parts: list[dict[str, Any]] = []
+        for part in tool_content:
+            if not isinstance(part, dict):
+                continue
+            part_type = part.get("type")
+            if part_type in {"image_url", "input_image"}:
+                image_parts.append(part)
+        return image_parts
+
+    def _tool_image_bridge_message(
+        self,
+        *,
+        tool_name: str,
+        tool_call_id: str,
+        tool_content: Any,
+    ) -> dict[str, Any] | None:
+        image_parts = self._tool_result_image_parts(tool_content)
+        if not image_parts:
+            return None
+        return {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        f"Use the attached image returned by {tool_name} "
+                        f"({tool_call_id}) for visual reasoning. Do not infer "
+                        "visual details from filenames, OCR, URLs, or window "
+                        "metadata."
+                    ),
+                },
+                *image_parts,
+            ],
+        }
+
     def _tool_executor_supports_output_mode(
         self,
         tool_executor: Callable[..., Any],
@@ -871,6 +910,13 @@ class CommandClient:
                     "content": tool_content,
                 }
             )
+            image_bridge = self._tool_image_bridge_message(
+                tool_name=fn_name,
+                tool_call_id=call["id"],
+                tool_content=tool_content,
+            )
+            if image_bridge is not None:
+                messages.append(image_bridge)
 
         return messages, visible_response, False
 

@@ -451,8 +451,8 @@ class TestStreamCommand:
         assert chain[2]["role"] == "tool"
         assert chain[2]["content"] == '{"ok": true}'
 
-    def test_vlm_capture_tool_round_sends_multimodal_tool_content(self):
-        """VLM backends should carry screenshot tool results as multimodal content."""
+    def test_vlm_capture_tool_round_bridges_tool_image_as_user_image(self):
+        """VLM backends should see screenshot tool images on a user multimodal turn."""
         from spoke.command import CommandClient
         from spoke.tool_dispatch import get_tool_schemas
 
@@ -506,11 +506,28 @@ class TestStreamCommand:
             )
 
         assert tool_calls[0]["tool_output_mode"] == "multimodal"
-        assert request_bodies[1]["messages"][-1] == {
+        assert request_bodies[1]["messages"][-2] == {
             "role": "tool",
             "tool_call_id": "call_1",
             "content": [
                 {"type": "text", "text": '{"scene_ref":"scene-test"}'},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,QUJD"},
+                },
+            ],
+        }
+        assert request_bodies[1]["messages"][-1] == {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "Use the attached image returned by capture_context "
+                        "(call_1) for visual reasoning. Do not infer visual "
+                        "details from filenames, OCR, URLs, or window metadata."
+                    ),
+                },
                 {
                     "type": "image_url",
                     "image_url": {"url": "data:image/png;base64,QUJD"},
@@ -575,11 +592,28 @@ class TestStreamCommand:
             )
 
         assert tool_calls[0]["tool_output_mode"] == "multimodal"
-        assert request_bodies[1]["messages"][-1] == {
+        assert request_bodies[1]["messages"][-2] == {
             "role": "tool",
             "tool_call_id": "call_1",
             "content": [
                 {"type": "text", "text": '{"scene_ref":"scene-test"}'},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": "data:image/png;base64,QUJD"},
+                },
+            ],
+        }
+        assert request_bodies[1]["messages"][-1] == {
+            "role": "user",
+            "content": [
+                {
+                    "type": "text",
+                    "text": (
+                        "Use the attached image returned by capture_context "
+                        "(call_1) for visual reasoning. Do not infer visual "
+                        "details from filenames, OCR, URLs, or window metadata."
+                    ),
+                },
                 {
                     "type": "image_url",
                     "image_url": {"url": "data:image/png;base64,QUJD"},

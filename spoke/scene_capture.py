@@ -784,6 +784,7 @@ def capture_context(
     cache: SceneCaptureCache | None = None,
     cache_dir: str | None = None,
     skip_ocr: bool | None = None,
+    skip_ax: bool | None = None,
 ) -> SceneCapture | None:
     """Capture a scene and return a SceneCapture artifact.
 
@@ -858,8 +859,15 @@ def capture_context(
         logger.info("capture_context: OCR %.0fms (%d blocks)", (time.perf_counter() - t_save) * 1000, len(ocr_blocks))
     t_ocr = time.perf_counter()
 
-    # AX hints (best-effort, with timeout)
-    ax_hints = _collect_ax_hints(scene_ref)
+    # AX hints (best-effort, with timeout; skippable for image-only VLM prompts).
+    if skip_ax is None:
+        skip_ax = os.environ.get("SPOKE_SKIP_AX", "").lower() in ("1", "true", "yes")
+
+    if skip_ax:
+        ax_hints = []
+        logger.info("capture_context: AX hints skipped")
+    else:
+        ax_hints = _collect_ax_hints(scene_ref)
     t_ax = time.perf_counter()
     logger.info("capture_context: AX hints %.0fms (%d hints)", (t_ax - t_ocr) * 1000, len(ax_hints))
 
