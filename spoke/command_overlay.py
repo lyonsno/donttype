@@ -4134,10 +4134,8 @@ class CommandOverlay(NSObject):
         )
         _pin_timer_to_active_run_loop_modes(self._visual_ready_timer)
 
-    def compositorDidPresent_(self, payload) -> None:
-        """Called on main thread when the compositor presents its first frame."""
-        # Ensure compositor window is visible and overlay is on top of it
-        # now that the compositor has actually rendered content.
+    def _enforce_compositor_window_order(self) -> None:
+        """Ensure compositor window is visible and overlay is on top of it."""
         compositor = getattr(self, "_fullscreen_compositor", None)
         if compositor is not None:
             host = getattr(compositor, "_host", None)
@@ -4145,8 +4143,12 @@ class CommandOverlay(NSObject):
             comp_window = getattr(comp_inner, "_window", None) if comp_inner else None
             if comp_window is not None and hasattr(comp_window, "orderFrontRegardless"):
                 comp_window.orderFrontRegardless()
-            if self._window is not None:
-                self._window.orderFrontRegardless()
+        if self._window is not None:
+            self._window.orderFrontRegardless()
+
+    def compositorDidPresent_(self, payload) -> None:
+        """Called on main thread when the compositor presents its first frame."""
+        self._enforce_compositor_window_order()
         if getattr(self, "_entrance_started", False):
             return
         if not getattr(self, "_visible", False):
@@ -4217,11 +4219,14 @@ class CommandOverlay(NSObject):
             self._stop_fullscreen_compositor()
             self._thaw_local_shell_layers()
             self._start_backdrop_refresh_timer()
-        elif not getattr(self, "_visual_ready_brightness_synced", False):
-            self._sync_optical_compositor_brightness(
-                hide_stale_fill=True,
-                refresh_fill=True,
-            )
+        else:
+            if not getattr(self, "_visual_ready_brightness_synced", False):
+                self._sync_optical_compositor_brightness(
+                    hide_stale_fill=True,
+                    refresh_fill=True,
+                )
+            # Ensure compositor window is visible and overlay is on top
+            self._enforce_compositor_window_order()
         self._start_entrance_animation()
 
     def _optical_entrance_ready(self) -> bool:

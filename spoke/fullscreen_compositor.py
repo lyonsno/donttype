@@ -1812,6 +1812,16 @@ class OverlayCompositorClient:
         compositor = getattr(self._host, "_compositor", None)
         if compositor is not None:
             compositor._on_first_present = callback
+            # If the compositor already presented before the callback was
+            # set, fire it immediately — the render-thread check for
+            # was_first would never trigger.
+            if getattr(compositor, "_presented_count", 0) > 0:
+                compositor._on_first_present = None
+                if callback is not None:
+                    try:
+                        callback()
+                    except Exception:
+                        pass
 
     def diagnostics_snapshot(self) -> dict[str, float | int]:
         if self._host is None:
