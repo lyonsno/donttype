@@ -2207,6 +2207,23 @@ class CommandOverlay(NSObject):
         """Fade the overlay in, optionally starting or resuming the thinking timer."""
         if self._window is None:
             return
+        # If a dismiss animation is in flight, queue this show and let
+        # the dismiss finish cleanly before reopening.
+        dismiss_in_flight = (
+            (getattr(self, "_fade_timer", None) is not None and getattr(self, "_fade_direction", 0) == -1)
+            or getattr(self, "_cancel_timer_anim", None) is not None
+            or getattr(self, "_pucker_tail_timer", None) is not None
+        )
+        if dismiss_in_flight:
+            self._queued_show_args = {
+                "initial_utterance": initial_utterance,
+                "initial_response": initial_response,
+                "start_thinking_timer": start_thinking_timer,
+                "preserve_thinking_timer": preserve_thinking_timer,
+            }
+            record_command_overlay_trace("overlay.show.queued_during_dismiss")
+            return
+        self._queued_show_args = None
         record_command_overlay_trace(
             "overlay.show.begin",
             was_visible=bool(getattr(self, "_visible", False)),
@@ -2466,6 +2483,7 @@ class CommandOverlay(NSObject):
             self._window.orderOut_(None)
             self._visible = False
             self._cancel_pulse()
+            self._fire_queued_show_if_pending()
 
     def hide(self) -> None:
         """Fade out without competing pulse work during the dismiss animation."""
@@ -2989,6 +3007,7 @@ class CommandOverlay(NSObject):
                 self._stop_fullscreen_compositor(reveal_local_shell=False)
                 self._window.orderOut_(None)
                 self._cancel_pulse()  # now kill the pulse
+                self._fire_queued_show_if_pending()
             else:
                 self._window.setAlphaValue_(1.0)
 
@@ -3602,6 +3621,7 @@ class CommandOverlay(NSObject):
         self._reset_backdrop_layer()
         self._window.orderOut_(None)
         self._cancel_pulse()
+        self._fire_queued_show_if_pending()
         return True
 
     def _start_entrance_animation(self) -> None:
@@ -3838,6 +3858,7 @@ class CommandOverlay(NSObject):
         self._publish_dismiss_pucker_tail_frame(progress)
         if progress >= 1.0:
             self._cancel_dismiss_pucker_tail_animation()
+            self._fire_queued_show_if_pending()
 
     def _set_materialization_layer_scale(
         self,
@@ -4133,6 +4154,15 @@ class CommandOverlay(NSObject):
             False,
         )
         _pin_timer_to_active_run_loop_modes(self._visual_ready_timer)
+
+    def _fire_queued_show_if_pending(self) -> None:
+        """If a show was queued during dismiss, fire it now that dismiss is done."""
+        args = getattr(self, "_queued_show_args", None)
+        if args is None:
+            return
+        self._queued_show_args = None
+        record_command_overlay_trace("overlay.show.dequeued_after_dismiss")
+        self.show(**args)
 
     def _enforce_compositor_window_order(self) -> None:
         """Ensure compositor window is visible and overlay is on top of it."""
@@ -5144,19 +5174,6 @@ class CommandOverlay(NSObject):
                 finally:
                     self._suppress_stale_fill_until_ready = suppress_stale_fill
                 self._start_deferred_materialization_if_ready()
-                # If materialization didn't start (fill still pending),
-                # push the full shell config so the warp is at least visible
-                # while we wait. The materialization will override this when
-                # it starts.
-                if (
-                    getattr(self, "_deferred_materialization_shell_config", None) is not None
-                    and getattr(self, "_materialization_timer", None) is None
-                ):
-                    try:
-                        compositor.update_shell_config(dict(final_shell_config))
-                        self._materialization_progress = 1.0
-                    except Exception:
-                        pass
                 logger.info("Command overlay: full-screen compositor started")
             else:
                 logger.info("Command overlay: full-screen compositor failed to start")
