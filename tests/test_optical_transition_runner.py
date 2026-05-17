@@ -126,3 +126,34 @@ def test_transition_tail_frame_hides_main_client_while_radial_releases():
     assert frame.radial_config["client_id"] == "agent.card.1.dismiss_radial_pucker"
     assert frame.radial_config["role"] == "agent_card"
     assert frame.radial_config["z_index"] == 29
+
+
+def test_small_surface_dismiss_radial_pucker_stays_near_own_footprint():
+    transition = importlib.import_module("spoke.optical_transition")
+    card_shell = {
+        "center_x": 1666.0,
+        "center_y": 834.0,
+        "content_width_points": 420.0,
+        "content_height_points": 132.0,
+        "corner_radius_points": 44.0,
+        "core_magnification": 1.22,
+        "ring_amplitude_points": 84.0,
+        "tail_amplitude_points": 34.0,
+    }
+
+    radial = transition.dismiss_radial_pucker_shell_config(
+        card_shell,
+        progress=0.2,
+        client_id="stack.speculum.demo.dismiss_radial_pucker",
+        role="tray",
+        z_index=59,
+    )
+
+    assert radial["content_width_points"] == pytest.approx(
+        radial["content_height_points"]
+    )
+    assert radial["content_width_points"] <= card_shell["content_width_points"] * 2.0
+    assert radial["content_width_points"] >= card_shell["content_width_points"] * 1.2
+    assert radial["corner_radius_points"] == pytest.approx(
+        radial["content_width_points"] * 0.5
+    )
