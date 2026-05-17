@@ -49,6 +49,13 @@ The first successful instance is `spoke.optical_transition`: pressure-slit
 materialize/dismiss frame generation moved out of `CommandOverlay`, while
 `CommandOverlay` now consumes `OpticalTransitionRunner`.
 
+The first public-adapter proving slice is **Tray-Is-Agents Stack Speculum**:
+prove a synthetic stack-card/tray-HUD optical presence can consume House
+lifecycle without migrating the legacy tray, user preview, Perceptasia live
+state, Zetesis live backend, or RMS/audio preview behavior. The point of the
+slice is diagnostic: expose the primitive to one clean second consumer before
+claiming extraction is reusable.
+
 ## Non-Negotiable Checks
 
 **Consumer still attached.** A shared module that no production path consumes
@@ -100,6 +107,11 @@ use without receiving private progress, phase, timer, or geometry-queue
 custody. That second consumer must be added with the same discipline: attached
 consumer, bypass test, duplicate ownership removed, and original behavior still
 smoked.
+
+For `Tray-Is-Agents Stack Speculum`, "additional consumer" means a stack-card
+shaped `OpticalFieldRequest` with stable caller identity, `tray`/`hud`
+presentation metadata, explicit bounds/content frame, and lifecycle intent. It
+does not mean the real speech-editing tray has been migrated.
 
 ## Review Posture
 
