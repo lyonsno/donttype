@@ -84,6 +84,7 @@ _COMMAND_OVERLAY_WINDOW_LEVEL = _OVERLAY_WINDOW_LEVEL + 1
 _STACK_SPECULUM_SMOKE_ENABLED = _env_bool("SPOKE_STACK_SPECULUM_SMOKE", False)
 _STACK_SPECULUM_CLIENT_ID = "stack.speculum.demo"
 _STACK_SPECULUM_CONTENT_INSET = 18.0
+_STACK_SPECULUM_MIN_READABLE_TEXT_HEIGHT = 54.0
 _STACK_SPECULUM_CONTENT_TEXT = (
     "Stack Speculum\n"
     "House optical consumer\n"
@@ -1566,6 +1567,25 @@ class CommandOverlay(NSObject):
             return diagnostic
         width = max(float(diagnostic.get("content_width_points", 0.0)), 1.0)
         height = max(float(diagnostic.get("content_height_points", 0.0)), 1.0)
+        material_progress = float(diagnostic.get("_materialization_progress", 1.0))
+        material_state = _materialization_fill_state(material_progress)
+        material_base_width = max(
+            float(diagnostic.get("_materialization_base_width_points", width)),
+            1.0,
+        )
+        material_base_height = max(
+            float(diagnostic.get("_materialization_base_height_points", height)),
+            1.0,
+        )
+        material_base_radius = max(
+            float(
+                diagnostic.get(
+                    "_materialization_base_corner_radius_points",
+                    diagnostic.get("corner_radius_points", 1.0),
+                )
+            ),
+            1.0,
+        )
         diagnostic.update(
             {
                 "content_width_points": width,
@@ -1594,8 +1614,12 @@ class CommandOverlay(NSObject):
                 "debug_visualize": True,
                 "debug_grid_spacing_points": 12.0,
                 "gpu_material_enabled": 1.0,
+                "gpu_material_base_width_points": material_base_width,
+                "gpu_material_base_height_points": material_base_height,
+                "gpu_material_base_corner_radius_points": material_base_radius,
+                "gpu_material_height_frac": material_state["height_frac"],
                 "gpu_material_brightness": 0.82,
-                "gpu_material_opacity": 0.72,
+                "gpu_material_opacity": min(0.72, material_state["opacity"]),
                 "gpu_material_text_contrast_bias": 0.9,
                 "gpu_material_ridge_emphasis": 1.0,
             }
@@ -1688,6 +1712,23 @@ class CommandOverlay(NSObject):
             max(frame.size.height - 2 * _STACK_SPECULUM_CONTENT_INSET, 1.0),
         )
 
+    def _stack_speculum_smoke_content_text_size(self, config: dict) -> tuple[float, float]:
+        width = max(float(config.get("content_width_points", 0.0)), 1.0)
+        height = max(float(config.get("content_height_points", 0.0)), 1.0)
+        return (
+            max(width - 2 * _STACK_SPECULUM_CONTENT_INSET, 1.0),
+            max(height - 2 * _STACK_SPECULUM_CONTENT_INSET, 1.0),
+        )
+
+    def _stack_speculum_smoke_content_readable(self, config: dict) -> tuple[bool, float, float]:
+        text_width, text_height = self._stack_speculum_smoke_content_text_size(config)
+        return (
+            text_width > 1.0
+            and text_height >= _STACK_SPECULUM_MIN_READABLE_TEXT_HEIGHT,
+            text_width,
+            text_height,
+        )
+
     def _resize_stack_speculum_smoke_content_views(self, frame) -> tuple[float, float]:
         content = getattr(self, "_stack_speculum_smoke_content_view", None)
         text = getattr(self, "_stack_speculum_smoke_content_text", None)
@@ -1765,7 +1806,10 @@ class CommandOverlay(NSObject):
         return window
 
     def _update_stack_speculum_smoke_content(self, config: dict, *, body_ready: bool) -> None:
-        if not body_ready or not bool(config.get("visible", True)):
+        content_readable, text_frame_width, text_frame_height = (
+            self._stack_speculum_smoke_content_readable(config)
+        )
+        if not body_ready or not bool(config.get("visible", True)) or not content_readable:
             window = getattr(self, "_stack_speculum_smoke_content_window", None)
             if window is not None:
                 try:
@@ -1775,7 +1819,11 @@ class CommandOverlay(NSObject):
                             "stack_speculum.content.hide",
                             reason="body_not_ready"
                             if not body_ready
+                            else "content_not_readable"
+                            if not content_readable
                             else "config_not_visible",
+                            text_frame_width=text_frame_width,
+                            text_frame_height=text_frame_height,
                         )
                     self._stack_speculum_smoke_content_visible = False
                 except Exception:

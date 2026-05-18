@@ -313,6 +313,10 @@ def test_stack_speculum_smoke_diagnostic_preserves_materialization_seam_geometry
         raw["content_height_points"]
     )
     assert diagnostic["content_height_points"] < request.bounds.height * 0.10
+    assert diagnostic["gpu_material_opacity"] == pytest.approx(0.0)
+    assert diagnostic["gpu_material_height_frac"] == pytest.approx(
+        mod._materialization_fill_state(0.0)["height_frac"]
+    )
 
 
 def test_stack_speculum_smoke_diagnostic_does_not_repaint_dismiss_sidecars(
@@ -504,7 +508,7 @@ def test_stack_speculum_smoke_content_window_tracks_main_field_after_body_ready(
     assert "House optical consumer" in overlay._stack_speculum_smoke_content_text.string
 
 
-def test_stack_speculum_smoke_content_resizes_internal_text_after_body_ready_growth(
+def test_stack_speculum_smoke_content_waits_for_readable_text_frame_then_resizes(
     mock_pyobjc,
     monkeypatch,
 ):
@@ -620,21 +624,28 @@ def test_stack_speculum_smoke_content_resizes_internal_text_after_body_ready_gro
     monkeypatch.setattr(mod.NSTextView, "alloc", FakeText.alloc)
     monkeypatch.setattr(mod, "NSMakeRect", _make_rect)
 
-    small_config = {
+    tiny_config = {
         "client_id": "stack.speculum.demo",
         "center_x": 1666.0,
         "center_y": 852.0,
         "content_width_points": 420.0,
         "content_height_points": 17.0,
     }
+    readable_config = {
+        **tiny_config,
+        "content_height_points": 97.0,
+    }
     full_config = {
-        **small_config,
+        **tiny_config,
         "content_height_points": 132.0,
     }
 
-    overlay._update_stack_speculum_smoke_content(small_config, body_ready=True)
+    overlay._update_stack_speculum_smoke_content(tiny_config, body_ready=True)
+    assert getattr(overlay, "_stack_speculum_smoke_content_window", None) is None
+
+    overlay._update_stack_speculum_smoke_content(readable_config, body_ready=True)
     assert overlay._stack_speculum_smoke_content_text.frame.size.height == pytest.approx(
-        1.0
+        61.0
     )
 
     overlay._update_stack_speculum_smoke_content(full_config, body_ready=True)
@@ -649,7 +660,7 @@ def test_stack_speculum_smoke_content_resizes_internal_text_after_body_ready_gro
         fields for event, fields in events if event == "stack_speculum.content.resize"
     )
     assert resize_fields["text_frame_height"] == pytest.approx(96.0)
-    assert resize_fields["previous_text_frame_height"] == pytest.approx(1.0)
+    assert resize_fields["previous_text_frame_height"] == pytest.approx(61.0)
 
 
 def test_stack_speculum_smoke_content_traces_visibility_transitions(

@@ -213,6 +213,7 @@ def materialized_shell_config(shell_config: dict, progress: float) -> dict:
     config["_materialization_base_width_points"] = base_w
     config["_materialization_base_height_points"] = base_h
     config["_materialization_base_corner_radius_points"] = base_radius
+    config["_materialization_progress"] = p
     _with_gpu_material_basis(
         config,
         width=base_w,
