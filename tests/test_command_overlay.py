@@ -424,6 +424,9 @@ def test_stack_speculum_smoke_content_window_tracks_main_field_after_body_ready(
             self.frame = frame
             return self
 
+        def setFrame_(self, frame):
+            self.frame = frame
+
         def setWantsLayer_(self, value):
             self.wants_layer = value
 
@@ -438,6 +441,9 @@ def test_stack_speculum_smoke_content_window_tracks_main_field_after_body_ready(
         def initWithFrame_(self, frame):
             self.frame = frame
             return self
+
+        def setFrame_(self, frame):
+            self.frame = frame
 
         def setEditable_(self, value):
             self.editable = value
@@ -488,8 +494,162 @@ def test_stack_speculum_smoke_content_window_tracks_main_field_after_body_ready(
     assert windows
     assert windows[0].ignores_mouse is True
     assert windows[0].ordered_front_regardless is True
+    assert overlay._stack_speculum_smoke_content_view.frame.size.height == pytest.approx(
+        132.0
+    )
+    assert overlay._stack_speculum_smoke_content_text.frame.size.height == pytest.approx(
+        96.0
+    )
     assert overlay._stack_speculum_smoke_content_text.string.startswith("Stack Speculum")
     assert "House optical consumer" in overlay._stack_speculum_smoke_content_text.string
+
+
+def test_stack_speculum_smoke_content_resizes_internal_text_after_body_ready_growth(
+    mock_pyobjc,
+    monkeypatch,
+):
+    overlay, mod = _make_overlay(mock_pyobjc)
+    events = []
+    monkeypatch.setattr(
+        mod,
+        "record_command_overlay_trace",
+        lambda event, **fields: events.append((event, fields)),
+    )
+
+    class FakeWindow:
+        @classmethod
+        def alloc(cls):
+            return cls()
+
+        def initWithContentRect_styleMask_backing_defer_(self, frame, *args):
+            self.frame = frame
+            return self
+
+        def setLevel_(self, value):
+            self.level = value
+
+        def setOpaque_(self, value):
+            self.opaque = value
+
+        def setBackgroundColor_(self, value):
+            self.background = value
+
+        def setIgnoresMouseEvents_(self, value):
+            self.ignores_mouse = value
+
+        def setHasShadow_(self, value):
+            self.has_shadow = value
+
+        def setCollectionBehavior_(self, value):
+            self.collection_behavior = value
+
+        def setContentView_(self, value):
+            self.content_view = value
+
+        def setFrame_display_(self, frame, display):
+            self.frame = frame
+
+        def setAlphaValue_(self, value):
+            self.alpha = value
+
+        def orderFrontRegardless(self):
+            self.front = True
+
+        def orderOut_(self, sender):
+            self.out = True
+
+    class FakeView:
+        @classmethod
+        def alloc(cls):
+            return cls()
+
+        def initWithFrame_(self, frame):
+            self.frame = frame
+            return self
+
+        def setFrame_(self, frame):
+            self.frame = frame
+
+        def setWantsLayer_(self, value):
+            self.wants_layer = value
+
+        def addSubview_(self, view):
+            self.subview = view
+
+    class FakeText:
+        @classmethod
+        def alloc(cls):
+            return cls()
+
+        def initWithFrame_(self, frame):
+            self.frame = frame
+            return self
+
+        def setFrame_(self, frame):
+            self.frame = frame
+
+        def setEditable_(self, value):
+            self.editable = value
+
+        def setSelectable_(self, value):
+            self.selectable = value
+
+        def setDrawsBackground_(self, value):
+            self.draws_background = value
+
+        def setTextColor_(self, value):
+            self.text_color = value
+
+        def setFont_(self, value):
+            self.font = value
+
+        def setString_(self, value):
+            self.string = value
+
+        def textContainer(self):
+            return MagicMock()
+
+        def setHorizontallyResizable_(self, value):
+            self.horizontally_resizable = value
+
+        def setVerticallyResizable_(self, value):
+            self.vertically_resizable = value
+
+    monkeypatch.setattr(mod.NSWindow, "alloc", FakeWindow.alloc)
+    monkeypatch.setattr(mod.NSView, "alloc", FakeView.alloc)
+    monkeypatch.setattr(mod.NSTextView, "alloc", FakeText.alloc)
+    monkeypatch.setattr(mod, "NSMakeRect", _make_rect)
+
+    small_config = {
+        "client_id": "stack.speculum.demo",
+        "center_x": 1666.0,
+        "center_y": 852.0,
+        "content_width_points": 420.0,
+        "content_height_points": 17.0,
+    }
+    full_config = {
+        **small_config,
+        "content_height_points": 132.0,
+    }
+
+    overlay._update_stack_speculum_smoke_content(small_config, body_ready=True)
+    assert overlay._stack_speculum_smoke_content_text.frame.size.height == pytest.approx(
+        1.0
+    )
+
+    overlay._update_stack_speculum_smoke_content(full_config, body_ready=True)
+
+    assert overlay._stack_speculum_smoke_content_view.frame.size.height == pytest.approx(
+        132.0
+    )
+    assert overlay._stack_speculum_smoke_content_text.frame.size.height == pytest.approx(
+        96.0
+    )
+    resize_fields = next(
+        fields for event, fields in events if event == "stack_speculum.content.resize"
+    )
+    assert resize_fields["text_frame_height"] == pytest.approx(96.0)
+    assert resize_fields["previous_text_frame_height"] == pytest.approx(1.0)
 
 
 def test_stack_speculum_smoke_content_traces_visibility_transitions(
@@ -523,6 +683,7 @@ def test_stack_speculum_smoke_content_traces_visibility_transitions(
     show_fields = next(fields for event, fields in events if event == "stack_speculum.content.show")
     assert show_fields["width"] == pytest.approx(420.0)
     assert show_fields["height"] == pytest.approx(132.0)
+    assert show_fields["text_frame_height"] == pytest.approx(96.0)
     assert show_fields["text_len"] == len(mod._STACK_SPECULUM_CONTENT_TEXT)
 
 

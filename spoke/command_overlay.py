@@ -1680,6 +1680,25 @@ class CommandOverlay(NSObject):
             height,
         )
 
+    def _stack_speculum_smoke_content_text_frame(self, frame):
+        return NSMakeRect(
+            _STACK_SPECULUM_CONTENT_INSET,
+            _STACK_SPECULUM_CONTENT_INSET,
+            max(frame.size.width - 2 * _STACK_SPECULUM_CONTENT_INSET, 1.0),
+            max(frame.size.height - 2 * _STACK_SPECULUM_CONTENT_INSET, 1.0),
+        )
+
+    def _resize_stack_speculum_smoke_content_views(self, frame) -> tuple[float, float]:
+        content = getattr(self, "_stack_speculum_smoke_content_view", None)
+        text = getattr(self, "_stack_speculum_smoke_content_text", None)
+        content_frame = NSMakeRect(0, 0, frame.size.width, frame.size.height)
+        text_frame = self._stack_speculum_smoke_content_text_frame(frame)
+        if content is not None and hasattr(content, "setFrame_"):
+            content.setFrame_(content_frame)
+        if text is not None and hasattr(text, "setFrame_"):
+            text.setFrame_(text_frame)
+        return float(text_frame.size.width), float(text_frame.size.height)
+
     def _ensure_stack_speculum_smoke_content_window(self, config: dict):
         window = getattr(self, "_stack_speculum_smoke_content_window", None)
         if window is not None:
@@ -1707,12 +1726,7 @@ class CommandOverlay(NSObject):
                 NSMakeRect(0, 0, frame.size.width, frame.size.height)
             )
             content.setWantsLayer_(True)
-            text_frame = NSMakeRect(
-                _STACK_SPECULUM_CONTENT_INSET,
-                _STACK_SPECULUM_CONTENT_INSET,
-                max(frame.size.width - 2 * _STACK_SPECULUM_CONTENT_INSET, 1.0),
-                max(frame.size.height - 2 * _STACK_SPECULUM_CONTENT_INSET, 1.0),
-            )
+            text_frame = self._stack_speculum_smoke_content_text_frame(frame)
             text = NSTextView.alloc().initWithFrame_(text_frame)
             text.setEditable_(False)
             text.setSelectable_(False)
@@ -1741,6 +1755,7 @@ class CommandOverlay(NSObject):
         self._stack_speculum_smoke_content_text = text
         self._stack_speculum_smoke_content_view = content
         self._stack_speculum_smoke_content_visible = False
+        self._stack_speculum_smoke_content_last_text_frame_size = None
         record_command_overlay_trace(
             "stack_speculum.content.created",
             width=float(frame.size.width),
@@ -1771,21 +1786,50 @@ class CommandOverlay(NSObject):
             return
         frame = self._stack_speculum_smoke_content_frame(config)
         try:
+            was_visible = bool(getattr(self, "_stack_speculum_smoke_content_visible", False))
+            previous_text_frame_size = getattr(
+                self,
+                "_stack_speculum_smoke_content_last_text_frame_size",
+                None,
+            )
             window.setFrame_display_(frame, True)
+            text_frame_width, text_frame_height = (
+                self._resize_stack_speculum_smoke_content_views(frame)
+            )
+            text_frame_size = (text_frame_width, text_frame_height)
+            if was_visible and previous_text_frame_size != text_frame_size:
+                record_command_overlay_trace(
+                    "stack_speculum.content.resize",
+                    x=float(frame.origin.x),
+                    y=float(frame.origin.y),
+                    width=float(frame.size.width),
+                    height=float(frame.size.height),
+                    text_frame_width=text_frame_width,
+                    text_frame_height=text_frame_height,
+                    previous_text_frame_width=previous_text_frame_size[0]
+                    if previous_text_frame_size is not None
+                    else None,
+                    previous_text_frame_height=previous_text_frame_size[1]
+                    if previous_text_frame_size is not None
+                    else None,
+                )
             window.setAlphaValue_(1.0)
             if hasattr(window, "orderFrontRegardless"):
                 window.orderFrontRegardless()
             else:
                 window.orderFront_(None)
-            if not getattr(self, "_stack_speculum_smoke_content_visible", False):
+            if not was_visible:
                 record_command_overlay_trace(
                     "stack_speculum.content.show",
                     x=float(frame.origin.x),
                     y=float(frame.origin.y),
                     width=float(frame.size.width),
                     height=float(frame.size.height),
+                    text_frame_width=text_frame_width,
+                    text_frame_height=text_frame_height,
                     text_len=len(_STACK_SPECULUM_CONTENT_TEXT),
                 )
+            self._stack_speculum_smoke_content_last_text_frame_size = text_frame_size
             self._stack_speculum_smoke_content_visible = True
         except Exception:
             logger.debug("Failed to update Stack Speculum smoke content", exc_info=True)
@@ -1867,6 +1911,7 @@ class CommandOverlay(NSObject):
         self._stack_speculum_smoke_content_view = None
         was_visible = bool(getattr(self, "_stack_speculum_smoke_content_visible", False))
         self._stack_speculum_smoke_content_visible = False
+        self._stack_speculum_smoke_content_last_text_frame_size = None
         if window is not None:
             try:
                 window.orderOut_(None)
