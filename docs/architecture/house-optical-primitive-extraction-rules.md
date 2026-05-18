@@ -79,6 +79,14 @@ known-good visual lifecycle through the extracted path.
 ownership, or change behavior while preserving ownership. It should not do both
 unless the behavioral change is tiny, deliberate, and separately witnessed.
 
+**Field-local radius is visually invariant by default.** The warp's local
+influence radius should read as the same physical optical field around small
+and large primitives, not as a radius scaled down just because the consumer
+bounds are smaller. If a small surface makes the warp look too large, first
+suspect the global warp tuning or the surface's articulation strategy. A
+size-specific radius reduction needs an explicit profile-level reason and a
+visual witness; it should not emerge accidentally from primitive dimensions.
+
 ## What Counts As Reproduction
 
 For the operator overlay, reproduction means human-visible smoke confirms the
