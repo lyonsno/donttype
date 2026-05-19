@@ -792,7 +792,7 @@ def _summon_retarget_progress_for_dismiss_progress(progress: float) -> float:
     """Map dismiss-local body progress onto a lawful summon re-entry point."""
     p = _clamp01(progress)
     if p < _OPTICAL_MATERIALIZATION_BODY_READY:
-        return min(p, _OPTICAL_MATERIALIZATION_SPREAD_END)
+        return min(p, _OPTICAL_MATERIALIZATION_MAG_SEED_FRAC)
     return min(p, _OPTICAL_MATERIALIZATION_BODY_READY)
 
 

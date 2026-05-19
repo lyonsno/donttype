@@ -702,6 +702,7 @@ class TestOpticalShellMaterialization:
         expected_start = mod._summon_retarget_progress_for_dismiss_progress(
             dismiss_progress
         )
+        assert expected_start <= mod._OPTICAL_MATERIALIZATION_MAG_SEED_FRAC
         assert kwargs["start_progress"] == pytest.approx(expected_start)
         assert kwargs["start_progress"] < dismiss_progress
         assert ("scroll-alpha", 0.0) in events
@@ -761,6 +762,7 @@ class TestOpticalShellMaterialization:
         expected_start = mod._summon_retarget_progress_for_dismiss_progress(
             dismiss_progress
         )
+        assert expected_start <= mod._OPTICAL_MATERIALIZATION_MAG_SEED_FRAC
         overlay._start_fullscreen_compositor.assert_called_once()
         compositor.stop.assert_not_called()
         assert ("scroll-alpha", 0.0) in events
@@ -774,6 +776,17 @@ class TestOpticalShellMaterialization:
 
         assert retarget_progress == pytest.approx(mod._OPTICAL_MATERIALIZATION_BODY_READY)
         assert retarget_progress < 0.72
+
+    def test_pre_body_dismiss_retarget_restarts_from_tiny_seed_not_full_width_spread(
+        self, mock_pyobjc
+    ):
+        _, mod = _make_overlay(mock_pyobjc)
+        retarget_progress = mod._summon_retarget_progress_for_dismiss_progress(0.306)
+
+        assert retarget_progress == pytest.approx(
+            mod._OPTICAL_MATERIALIZATION_MAG_SEED_FRAC
+        )
+        assert retarget_progress < mod._OPTICAL_MATERIALIZATION_SPREAD_END
 
     def test_body_ready_boundary_dismiss_retarget_is_not_full_open(
         self, mock_pyobjc
