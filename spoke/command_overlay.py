@@ -2348,6 +2348,8 @@ class CommandOverlay(NSObject):
         finally:
             self._suppress_stale_fill_until_ready = False
 
+        if optical_shell_start:
+            self._prime_scroll_for_optical_entrance()
         self._window.orderFrontRegardless()
         if optical_shell_start:
             # Arm the optical compositor while the command window is still
@@ -2367,6 +2369,7 @@ class CommandOverlay(NSObject):
                 # Compositor failed to start — restore frozen fallback layers
                 # so the AppKit local shell is visible.
                 self._thaw_local_shell_layers()
+                self._restore_scroll_after_optical_entrance_bypass()
                 if known_content_optical_start:
                     self._enable_text_punchthrough(False)
                 self._start_backdrop_refresh_timer()
@@ -4187,6 +4190,20 @@ class CommandOverlay(NSObject):
                 transaction.commit()
         except Exception:
             logger.debug("Failed to update scroll materialization mask", exc_info=True)
+
+    def _prime_scroll_for_optical_entrance(self) -> None:
+        """Hide text behind a seed slit until materialization explicitly reveals it."""
+        self._update_scroll_materialization_mask(
+            _OPTICAL_MATERIAL_FILL_MIN_HEIGHT_FRAC,
+            direction=1,
+        )
+        scroll = getattr(self, "_scroll_view", None)
+        if scroll is not None and hasattr(scroll, "setAlphaValue_"):
+            scroll.setAlphaValue_(0.0)
+
+    def _restore_scroll_after_optical_entrance_bypass(self) -> None:
+        """Restore text if the optical compositor cannot own the entrance."""
+        self._update_scroll_materialization_mask(1.0, direction=1)
 
     def _schedule_visual_start(self) -> None:
         """Defer compositor startup so first paint and text do not block."""

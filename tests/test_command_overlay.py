@@ -2501,6 +2501,27 @@ class TestWindowLayering:
 
         assert events[:2] == ["stop", "front"]
 
+    def test_show_primes_optical_text_plane_hidden_before_ordering_front(
+        self, mock_pyobjc, monkeypatch
+    ):
+        overlay, mod = _make_overlay(mock_pyobjc)
+        events = []
+        monkeypatch.setattr(mod, "_COMMAND_BACKDROP_OPTICAL_SHELL_ENABLED", True)
+        overlay._start_fullscreen_compositor = MagicMock()
+        overlay._window.orderFrontRegardless.side_effect = lambda: events.append("front")
+        overlay._scroll_view.setAlphaValue_.side_effect = (
+            lambda alpha: events.append(("scroll-alpha", alpha))
+        )
+
+        overlay.show(
+            initial_utterance="user said this",
+            initial_response="assistant answered this",
+            start_thinking_timer=False,
+        )
+
+        assert ("scroll-alpha", 0.0) in events
+        assert events.index(("scroll-alpha", 0.0)) < events.index("front")
+
     def test_show_stops_stale_compositor_and_thaws_layers_on_fallback(
         self, mock_pyobjc, monkeypatch
     ):
