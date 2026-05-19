@@ -670,7 +670,15 @@ class TestOpticalShellMaterialization:
         overlay._materialization_progress = dismiss_progress
         overlay._materialization_final_shell_config = dict(shell_config)
         overlay._display_local_optical_shell_config = MagicMock(return_value=shell_config)
-        overlay._start_materialization_animation = MagicMock()
+        events = []
+        overlay._scroll_view.setAlphaValue_.side_effect = (
+            lambda alpha: events.append(("scroll-alpha", alpha))
+        )
+        overlay._start_materialization_animation = MagicMock(
+            side_effect=lambda *_args, **kwargs: events.append(
+                ("materialize", kwargs.get("start_progress"))
+            )
+        )
 
         import spoke.fullscreen_compositor as fullscreen_compositor
 
@@ -691,8 +699,72 @@ class TestOpticalShellMaterialization:
         compositor.stop.assert_not_called()
         start_overlay_compositor.assert_not_called()
         _, kwargs = overlay._start_materialization_animation.call_args
-        assert kwargs["start_progress"] <= mod._OPTICAL_MATERIALIZATION_SPREAD_END
+        expected_start = mod._summon_retarget_progress_for_dismiss_progress(
+            dismiss_progress
+        )
+        assert kwargs["start_progress"] == pytest.approx(expected_start)
         assert kwargs["start_progress"] < dismiss_progress
+        assert ("scroll-alpha", 0.0) in events
+        assert events.index(("scroll-alpha", 0.0)) < events.index(
+            ("materialize", kwargs["start_progress"])
+        )
+
+    def test_hammer_toggle_show_dismiss_show_retargets_without_restart_or_text_flash(
+        self, mock_pyobjc, monkeypatch
+    ):
+        overlay, mod = _make_overlay(mock_pyobjc)
+        monkeypatch.setattr(mod, "_COMMAND_BACKDROP_OPTICAL_SHELL_ENABLED", True)
+        shell_config = {
+            "center_x": 640.0,
+            "center_y": 1160.0,
+            "content_width_points": 1200.0,
+            "content_height_points": 208.0,
+            "corner_radius_points": 32.0,
+            "initial_brightness": 0.35,
+            "gpu_material_brightness": 0.35,
+        }
+        compositor = MagicMock()
+        events = []
+        overlay._display_local_optical_shell_config = MagicMock(return_value=shell_config)
+        overlay._start_fullscreen_compositor = MagicMock(
+            side_effect=lambda: setattr(overlay, "_fullscreen_compositor", compositor)
+        )
+        overlay._start_materialization_animation = MagicMock(
+            side_effect=lambda *_args, **kwargs: events.append(
+                ("materialize", kwargs.get("direction"), kwargs.get("start_progress"))
+            )
+        )
+        overlay._scroll_view.setAlphaValue_.side_effect = (
+            lambda alpha: events.append(("scroll-alpha", alpha))
+        )
+        overlay._window.alphaValue.return_value = 1.0
+
+        overlay.show(
+            initial_utterance="ask",
+            initial_response="answer",
+            start_thinking_timer=False,
+        )
+        overlay.cancel_dismiss()
+
+        dismiss_progress = 0.47
+        overlay._materialization_timer = MagicMock()
+        overlay._materialization_direction = -1
+        overlay._materialization_progress = dismiss_progress
+        overlay._materialization_final_shell_config = dict(shell_config)
+
+        overlay.show(
+            initial_utterance="ask again",
+            initial_response="answer again",
+            start_thinking_timer=False,
+        )
+
+        expected_start = mod._summon_retarget_progress_for_dismiss_progress(
+            dismiss_progress
+        )
+        overlay._start_fullscreen_compositor.assert_called_once()
+        compositor.stop.assert_not_called()
+        assert ("scroll-alpha", 0.0) in events
+        assert ("materialize", None, expected_start) in events
 
     def test_body_ready_dismiss_retarget_is_capped_below_full_open_flash(
         self, mock_pyobjc
@@ -702,6 +774,17 @@ class TestOpticalShellMaterialization:
 
         assert retarget_progress == pytest.approx(mod._OPTICAL_MATERIALIZATION_BODY_READY)
         assert retarget_progress < 0.72
+
+    def test_body_ready_boundary_dismiss_retarget_is_not_full_open(
+        self, mock_pyobjc
+    ):
+        _, mod = _make_overlay(mock_pyobjc)
+        retarget_progress = mod._summon_retarget_progress_for_dismiss_progress(
+            mod._OPTICAL_MATERIALIZATION_BODY_READY
+        )
+
+        assert retarget_progress == pytest.approx(mod._OPTICAL_MATERIALIZATION_BODY_READY)
+        assert retarget_progress < 1.0
 
     def test_pre_body_dismiss_retarget_cannot_publish_late_summon_magnification(
         self, mock_pyobjc
@@ -2635,7 +2718,7 @@ class TestWindowLayering:
 
         assert chroma_states == [False]
 
-    def test_optical_show_with_initial_transcript_keeps_scroll_visible(
+    def test_optical_show_with_initial_transcript_restores_scroll_plane(
         self, mock_pyobjc, monkeypatch
     ):
         monkeypatch.setenv("SPOKE_COMMAND_BACKDROP_OPTICAL_SHELL_ENABLED", "1")
@@ -2654,9 +2737,10 @@ class TestWindowLayering:
             initial_response="Assistant response",
         )
 
-        # Scroll view stays visible — no punch-through mode, text renders directly
+        # Optical entrance may quarantine text briefly, but must not strand it hidden.
         hide_events = [h for tag, h in events if tag == "scroll_hidden"]
-        assert True not in hide_events or (True in hide_events and False in hide_events)
+        assert hide_events
+        assert hide_events[-1] is False
 
     def test_optical_show_with_prompt_only_arms_visual_stack_before_fade(
         self, mock_pyobjc, monkeypatch
