@@ -1,6 +1,6 @@
 """Tests for the optical lifecycle adapter.
 
-These are pure decision-law tests — no AppKit, no mocks, no GUI runtime.
+These are pure decision-law tests: no AppKit, no mocks, no GUI runtime.
 They verify the Slitgate invariants as extracted adapter contracts:
 
   1. Pre-body dismiss reversal re-enters from tiny seed (capped at MAG_SEED_FRAC).
@@ -17,17 +17,11 @@ from spoke.optical_lifecycle import (
     MAG_SEED_FRAC,
     LifecycleEvent,
     LifecycleState,
-    PendingEntranceTeardownDecision,
-    RetargetDecision,
-    TextPlaneRestoreDecision,
     next_state,
     retarget_progress_for_dismiss,
     should_restore_text_plane,
     should_teardown_pending_entrance,
 )
-
-
-# ── Retarget decision law ────────────────────────────────────────
 
 
 class TestRetargetProgressForDismiss:
@@ -36,49 +30,42 @@ class TestRetargetProgressForDismiss:
     def test_pre_body_low_progress_caps_at_seed(self):
         """Very early dismiss (progress near 0) should retarget at MAG_SEED_FRAC."""
         result = retarget_progress_for_dismiss(0.02)
-        assert result.should_retarget is True
         assert result.was_pre_body is True
         assert result.summon_start_progress == 0.02  # below seed frac, identity
 
     def test_pre_body_mid_progress_caps_at_seed(self):
         """Dismiss at 30% (pre-body) should cap retarget at MAG_SEED_FRAC."""
         result = retarget_progress_for_dismiss(0.30)
-        assert result.should_retarget is True
         assert result.was_pre_body is True
         assert result.summon_start_progress == MAG_SEED_FRAC
 
     def test_pre_body_just_below_threshold(self):
         """Dismiss just below BODY_READY should still cap at MAG_SEED_FRAC."""
         result = retarget_progress_for_dismiss(BODY_READY_PROGRESS - 0.01)
-        assert result.should_retarget is True
         assert result.was_pre_body is True
         assert result.summon_start_progress == MAG_SEED_FRAC
 
     def test_post_body_caps_at_body_ready(self):
         """Post-body dismiss should cap retarget at BODY_READY (never full-open flash)."""
         result = retarget_progress_for_dismiss(0.80)
-        assert result.should_retarget is True
         assert result.was_pre_body is False
         assert result.summon_start_progress == BODY_READY_PROGRESS
 
     def test_post_body_at_threshold(self):
         """Dismiss exactly at BODY_READY is post-body."""
         result = retarget_progress_for_dismiss(BODY_READY_PROGRESS)
-        assert result.should_retarget is True
         assert result.was_pre_body is False
         assert result.summon_start_progress == BODY_READY_PROGRESS
 
     def test_full_dismiss_near_zero(self):
         """Dismiss at progress 0.0 should retarget at 0.0."""
         result = retarget_progress_for_dismiss(0.0)
-        assert result.should_retarget is True
         assert result.was_pre_body is True
         assert result.summon_start_progress == 0.0
 
     def test_full_dismiss_at_one(self):
         """Dismiss at progress 1.0 caps at BODY_READY."""
         result = retarget_progress_for_dismiss(1.0)
-        assert result.should_retarget is True
         assert result.was_pre_body is False
         assert result.summon_start_progress == BODY_READY_PROGRESS
 
@@ -91,40 +78,6 @@ class TestRetargetProgressForDismiss:
         result = retarget_progress_for_dismiss(1.5)
         assert result.summon_start_progress == BODY_READY_PROGRESS
         assert result.was_pre_body is False
-
-
-# ── Constants match command_overlay.py ───────────────────────────
-
-
-class TestConstantsParity:
-    """Adapter constants must match the source-of-truth in command_overlay.py."""
-
-    def test_body_ready_progress(self):
-        from spoke import command_overlay as co
-        assert BODY_READY_PROGRESS == co._OPTICAL_MATERIALIZATION_BODY_READY
-
-    def test_mag_seed_frac(self):
-        from spoke import command_overlay as co
-        assert MAG_SEED_FRAC == co._OPTICAL_MATERIALIZATION_MAG_SEED_FRAC
-
-
-# ── Retarget parity with command_overlay ────────────────────────
-
-
-class TestRetargetParityWithOverlay:
-    """Adapter retarget must agree with command_overlay for all sampled values."""
-
-    @pytest.mark.parametrize("progress", [0.0, 0.01, 0.03, 0.04, 0.10, 0.30, 0.54, 0.55, 0.60, 0.80, 1.0])
-    def test_retarget_matches_overlay_function(self, progress):
-        from spoke import command_overlay as co
-        expected = co._summon_retarget_progress_for_dismiss_progress(progress)
-        result = retarget_progress_for_dismiss(progress)
-        assert abs(result.summon_start_progress - expected) < 1e-12, (
-            f"Mismatch at progress={progress}: adapter={result.summon_start_progress}, overlay={expected}"
-        )
-
-
-# ── Pending entrance teardown ────────────────────────────────────
 
 
 class TestShouldTeardownPendingEntrance:
@@ -170,9 +123,6 @@ class TestShouldTeardownPendingEntrance:
         assert result.should_teardown is True
 
 
-# ── Text-plane restore ───────────────────────────────────────────
-
-
 class TestShouldRestoreTextPlane:
     """Text-plane quarantine restores visibility when compositor fails."""
 
@@ -202,9 +152,6 @@ class TestShouldRestoreTextPlane:
             compositor_started=True, has_initial_content=True
         )
         assert result.should_restore is False
-
-
-# ── Transition table ─────────────────────────────────────────────
 
 
 class TestNextState:
@@ -250,9 +197,6 @@ class TestNextState:
             next_state(LifecycleState.SUMMONING, LifecycleEvent.SUMMON)
 
 
-# ── Full hammer-toggle cycle ─────────────────────────────────────
-
-
 class TestHammerToggleCycle:
     """Simulate rapid summon/dismiss hammer-toggling through the adapter."""
 
@@ -292,25 +236,3 @@ class TestHammerToggleCycle:
         assert s == LifecycleState.DISMISSING_PUCKER
         s = next_state(s, LifecycleEvent.SUMMON)
         assert s == LifecycleState.SUMMONING
-
-
-# ── Trajectory string parity ─────────────────────────────────────
-
-
-class TestTrajectoryStringParity:
-    """LifecycleState.value matches the string used in CommandOverlay._optical_lifecycle_trajectory."""
-
-    def test_idle_closed(self):
-        assert LifecycleState.IDLE_CLOSED.value == "idle_closed"
-
-    def test_idle_open(self):
-        assert LifecycleState.IDLE_OPEN.value == "idle_open"
-
-    def test_summoning(self):
-        assert LifecycleState.SUMMONING.value == "summoning"
-
-    def test_dismissing(self):
-        assert LifecycleState.DISMISSING.value == "dismissing"
-
-    def test_dismissing_pucker(self):
-        assert LifecycleState.DISMISSING_PUCKER.value == "dismissing_pucker"

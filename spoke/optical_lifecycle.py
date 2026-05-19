@@ -1,9 +1,9 @@
-"""Optical lifecycle adapter: pure state/transition vocabulary for the operator overlay.
+"""Optical lifecycle adapter for the operator overlay.
 
-This module extracts the lifecycle decision law from CommandOverlay's private
-state into a testable, consumable adapter.  The adapter owns:
+This module extracts lifecycle decision law from CommandOverlay internals into
+a testable adapter. The adapter owns:
 
-  - lifecycle state and event vocabulary (enums)
+  - lifecycle state and event vocabulary
   - retarget-progress decision: when summon arrives during dismiss, what
     progress to re-enter at
   - pending-entrance teardown decision: whether an alpha-zero entrance can
@@ -20,9 +20,6 @@ from __future__ import annotations
 
 import enum
 from typing import NamedTuple
-
-
-# ── Lifecycle vocabulary ────────────────────────────────────────────
 
 
 class LifecycleState(enum.Enum):
@@ -44,12 +41,8 @@ class LifecycleEvent(enum.Enum):
     PUCKER_COMPLETE = "pucker_complete"
 
 
-# ── Retarget decision ──────────────────────────────────────────────
-
 # These constants must match command_overlay.py exactly.  They are
-# duplicated here so the adapter can be tested without importing the
-# 5000-line overlay module.  If they drift, the integration call-site
-# will fail because the adapter and overlay will disagree on thresholds.
+# imported by command_overlay.py so the adapter owns the numeric retarget law.
 BODY_READY_PROGRESS = 0.55
 MAG_SEED_FRAC = 0.04
 
@@ -57,7 +50,6 @@ MAG_SEED_FRAC = 0.04
 class RetargetDecision(NamedTuple):
     """Result of evaluating a summon-during-dismiss retarget."""
 
-    should_retarget: bool
     summon_start_progress: float
     was_pre_body: bool
 
@@ -78,19 +70,11 @@ def retarget_progress_for_dismiss(dismiss_progress: float) -> RetargetDecision:
     """
     p = max(0.0, min(1.0, dismiss_progress))
     if p < BODY_READY_PROGRESS:
-        return RetargetDecision(
-            should_retarget=True,
-            summon_start_progress=min(p, MAG_SEED_FRAC),
-            was_pre_body=True,
-        )
+        return RetargetDecision(min(p, MAG_SEED_FRAC), True)
     return RetargetDecision(
-        should_retarget=True,
         summon_start_progress=min(p, BODY_READY_PROGRESS),
         was_pre_body=False,
     )
-
-
-# ── Pending entrance teardown ──────────────────────────────────────
 
 
 class PendingEntranceTeardownDecision(NamedTuple):
@@ -127,9 +111,6 @@ def should_teardown_pending_entrance(
     )
 
 
-# ── Text-plane restore contract ───────────────────────────────────
-
-
 class TextPlaneRestoreDecision(NamedTuple):
     """Whether the text plane needs restoration after an entrance bypass."""
 
@@ -158,9 +139,6 @@ def should_restore_text_plane(
         should_restore=True,
         reason="compositor_failed_with_content" if has_initial_content else "compositor_failed",
     )
-
-
-# ── Transition table ──────────────────────────────────────────────
 
 
 def next_state(current: LifecycleState, event: LifecycleEvent) -> LifecycleState:
