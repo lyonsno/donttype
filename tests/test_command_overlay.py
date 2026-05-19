@@ -3602,6 +3602,30 @@ class TestAdaptiveCompositing:
         overlay._start_entrance_animation.assert_called_once()
         assert overlay._fullscreen_compositor is None
 
+    def test_hard_deadline_does_not_certify_semantic_content_over_tiny_slit(
+        self, mock_pyobjc
+    ):
+        overlay, mod = _make_overlay(mock_pyobjc)
+        overlay._visible = True
+        overlay._entrance_started = False
+        overlay._materialization_progress = 0.10
+        overlay._fill_hidden_until_signature = None
+        timer = MagicMock()
+        overlay._visual_ready_timer = timer
+        compositor = MagicMock()
+        compositor.presented_count = 1
+        overlay._fullscreen_compositor = compositor
+        overlay._start_entrance_animation = MagicMock()
+        overlay._visual_ready_wait_started_at = (
+            time.perf_counter() - mod._OPTICAL_ENTRANCE_HARD_DEADLINE_S - 0.01
+        )
+
+        overlay.visualReadyDeadline_(timer)
+
+        assert overlay._entrance_started is False
+        overlay._start_entrance_animation.assert_not_called()
+        assert overlay._fullscreen_compositor is compositor
+
     def test_brightness_crossing_reaches_contrast_band_in_one_pulse(self, mock_pyobjc):
         sys.modules.pop("spoke.command_overlay", None)
         mod = importlib.import_module("spoke.command_overlay")

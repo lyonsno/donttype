@@ -3609,6 +3609,7 @@ class CommandOverlay(NSObject):
         record_command_overlay_trace(
             "overlay.entrance.start",
             materialization_progress=getattr(self, "_materialization_progress", None),
+            body_ready=self._optical_body_content_ready(),
             has_compositor=getattr(self, "_fullscreen_compositor", None) is not None,
             fill_ready=self._optical_fill_ready(),
         )
@@ -4252,11 +4253,29 @@ class CommandOverlay(NSObject):
             "overlay.visual_ready.hard_deadline",
             elapsed=elapsed,
             compositor_ready=compositor_ready,
+            body_ready=self._optical_body_content_ready(),
             fill_ready=self._optical_fill_ready(),
             materialization_progress=getattr(
                 self, "_materialization_progress", None
             ),
         )
+        if compositor_ready and not self._optical_body_content_ready():
+            self._cancel_visual_ready_start()
+            if not getattr(self, "_visual_ready_brightness_synced", False):
+                self._sync_optical_compositor_brightness(
+                    hide_stale_fill=True,
+                    refresh_fill=True,
+                )
+                self._visual_ready_brightness_synced = True
+            self._enforce_compositor_window_order()
+            record_command_overlay_trace(
+                "overlay.visual_ready.hard_deadline.body_not_ready",
+                elapsed=elapsed,
+                materialization_progress=getattr(
+                    self, "_materialization_progress", None
+                ),
+            )
+            return
         self._entrance_started = True
         self._cancel_visual_ready_start()
         if not compositor_ready:
@@ -4277,7 +4296,12 @@ class CommandOverlay(NSObject):
         return (
             self._optical_compositor_has_presented()
             and self._optical_fill_ready()
-            and getattr(self, "_materialization_progress", 1.0)
+            and self._optical_body_content_ready()
+        )
+
+    def _optical_body_content_ready(self) -> bool:
+        return (
+            getattr(self, "_materialization_progress", 1.0)
             >= _OPTICAL_MATERIALIZATION_BODY_READY
         )
 
