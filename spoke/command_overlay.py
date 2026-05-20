@@ -2275,6 +2275,16 @@ class CommandOverlay(NSObject):
         )
         self._reset_fill_generation_latches_for_show()
         had_compositor = getattr(self, "_fullscreen_compositor", None) is not None
+        retarget_seeded = False
+        if (
+            summon_retarget_progress is not None
+            and getattr(self, "_fullscreen_compositor", None) is not None
+        ):
+            self._retarget_fullscreen_compositor_for_show(
+                dismiss_progress=dismiss_reversal_progress,
+                start_progress=summon_retarget_progress,
+            )
+            retarget_seeded = True
         if had_compositor and summon_retarget_progress is None:
             self._stop_fullscreen_compositor(reveal_local_shell=False)
         self._visible = True
@@ -2363,10 +2373,11 @@ class CommandOverlay(NSObject):
                 summon_retarget_progress is not None
                 and getattr(self, "_fullscreen_compositor", None) is not None
             ):
-                self._retarget_fullscreen_compositor_for_show(
-                    dismiss_progress=dismiss_reversal_progress,
-                    start_progress=summon_retarget_progress,
-                )
+                if not retarget_seeded:
+                    self._retarget_fullscreen_compositor_for_show(
+                        dismiss_progress=dismiss_reversal_progress,
+                        start_progress=summon_retarget_progress,
+                    )
             else:
                 self._start_fullscreen_compositor()
             if getattr(self, "_fullscreen_compositor", None) is None:

@@ -706,8 +706,8 @@ class TestOpticalShellMaterialization:
         assert kwargs["start_progress"] == pytest.approx(expected_start)
         assert kwargs["start_progress"] < dismiss_progress
         assert ("scroll-alpha", 0.0) in events
-        assert events.index(("scroll-alpha", 0.0)) < events.index(
-            ("materialize", kwargs["start_progress"])
+        assert events.index(("materialize", kwargs["start_progress"])) < events.index(
+            ("scroll-alpha", 0.0)
         )
 
     def test_hammer_toggle_show_dismiss_show_retargets_without_restart_or_text_flash(
@@ -812,6 +812,55 @@ class TestOpticalShellMaterialization:
         assert expected_start < 1.0
         assert mask_progresses
         assert 1.0 not in mask_progresses
+
+    def test_show_during_dismiss_seeds_retarget_before_fresh_show_presentation(
+        self, mock_pyobjc, monkeypatch
+    ):
+        overlay, mod = _make_overlay(mock_pyobjc)
+        monkeypatch.setattr(mod, "_COMMAND_BACKDROP_OPTICAL_SHELL_ENABLED", True)
+        shell_config = {
+            "center_x": 640.0,
+            "center_y": 1160.0,
+            "content_width_points": 1200.0,
+            "content_height_points": 208.0,
+            "corner_radius_points": 32.0,
+            "initial_brightness": 0.35,
+            "gpu_material_brightness": 0.35,
+        }
+        events = []
+        compositor = MagicMock()
+        compositor.update_shell_config.side_effect = (
+            lambda _config: events.append("seed-retarget-compositor")
+        )
+        overlay._fullscreen_compositor = compositor
+        overlay._materialization_timer = MagicMock()
+        overlay._materialization_direction = -1
+        overlay._materialization_progress = 0.47
+        overlay._materialization_final_shell_config = dict(shell_config)
+        overlay._display_local_optical_shell_config = MagicMock(return_value=shell_config)
+        overlay._optical_fill_ready = MagicMock(return_value=True)
+        overlay._apply_ridge_masks = MagicMock()
+        overlay._apply_surface_theme = MagicMock()
+        overlay._reset_backdrop_layer = MagicMock(
+            side_effect=lambda: events.append("reset-backdrop")
+        )
+        overlay._prime_scroll_for_optical_entrance = MagicMock(
+            side_effect=lambda: events.append("prime-scroll")
+        )
+        overlay._schedule_visual_ready_start = MagicMock()
+
+        overlay.show(
+            initial_utterance="ask again",
+            initial_response="answer again",
+            start_thinking_timer=False,
+        )
+
+        assert "seed-retarget-compositor" in events
+        assert "reset-backdrop" in events
+        assert "prime-scroll" in events
+        seed_index = events.index("seed-retarget-compositor")
+        assert seed_index < events.index("reset-backdrop")
+        assert seed_index < events.index("prime-scroll")
 
     def test_body_ready_dismiss_retarget_is_capped_below_full_open_flash(
         self, mock_pyobjc
