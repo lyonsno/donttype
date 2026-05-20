@@ -17,6 +17,9 @@ from spoke.optical_lifecycle import (
     MAG_SEED_FRAC,
     LifecycleEvent,
     LifecycleState,
+    OpticalLifecycleController,
+    OpticalLifecycleSnapshot,
+    ToggleIntentAction,
     next_state,
     retarget_progress_for_dismiss,
     should_restore_text_plane,
@@ -236,3 +239,76 @@ class TestHammerToggleCycle:
         assert s == LifecycleState.DISMISSING_PUCKER
         s = next_state(s, LifecycleEvent.SUMMON)
         assert s == LifecycleState.SUMMONING
+
+
+class TestOpticalLifecycleController:
+    """Controller owns lifecycle intent legality before rendering moves behind it."""
+
+    def test_blocks_toggle_when_visible_summon_materialization_is_in_flight(self):
+        controller = OpticalLifecycleController()
+        decision = controller.decide_toggle(
+            OpticalLifecycleSnapshot(
+                visible=True,
+                visual_ready_pending=False,
+                fade_active=False,
+                fade_direction=0,
+                materialization_active=True,
+                materialization_direction=1,
+                trajectory="summoning",
+            )
+        )
+
+        assert decision.action is ToggleIntentAction.IGNORE
+        assert decision.reason == "visible_summon_materialization_in_flight"
+        assert decision.trace_fields["trajectory"] == "summoning"
+
+    def test_blocks_toggle_when_visible_entrance_is_waiting_for_visual_ready(self):
+        controller = OpticalLifecycleController()
+        decision = controller.decide_toggle(
+            OpticalLifecycleSnapshot(
+                visible=True,
+                visual_ready_pending=True,
+                fade_active=False,
+                fade_direction=0,
+                materialization_active=False,
+                materialization_direction=0,
+                trajectory="summoning",
+            )
+        )
+
+        assert decision.action is ToggleIntentAction.IGNORE
+        assert decision.reason == "visible_visual_ready_pending"
+
+    def test_allows_toggle_when_visible_overlay_is_settled_open(self):
+        controller = OpticalLifecycleController()
+        decision = controller.decide_toggle(
+            OpticalLifecycleSnapshot(
+                visible=True,
+                visual_ready_pending=False,
+                fade_active=False,
+                fade_direction=0,
+                materialization_active=False,
+                materialization_direction=0,
+                trajectory="idle_open",
+            )
+        )
+
+        assert decision.action is ToggleIntentAction.DISPATCH
+        assert decision.reason == "toggle_dispatch_allowed"
+
+    def test_allows_recall_when_overlay_is_not_visible_but_dismiss_is_active(self):
+        controller = OpticalLifecycleController()
+        decision = controller.decide_toggle(
+            OpticalLifecycleSnapshot(
+                visible=False,
+                visual_ready_pending=False,
+                fade_active=False,
+                fade_direction=0,
+                materialization_active=True,
+                materialization_direction=-1,
+                trajectory="dismissing",
+            )
+        )
+
+        assert decision.action is ToggleIntentAction.DISPATCH
+        assert decision.reason == "toggle_dispatch_allowed"

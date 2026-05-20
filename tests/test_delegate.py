@@ -11,6 +11,7 @@ import io
 import time
 import threading
 import urllib.error
+from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
 
@@ -4606,6 +4607,25 @@ class TestResultInjection:
 
 
 class TestCommandOverlayToggle:
+    def test_toggle_command_overlay_uses_lifecycle_controller_decision(
+        self, main_module, monkeypatch
+    ):
+        d = _make_delegate(main_module, monkeypatch)
+        d._command_client = MagicMock()
+        d._command_overlay = MagicMock(_visible=True)
+        d._optical_lifecycle_controller = MagicMock()
+        d._optical_lifecycle_controller.decide_toggle.return_value = SimpleNamespace(
+            action=main_module.ToggleIntentAction.IGNORE,
+            reason="controller_said_no",
+            trace_fields={"trajectory": "summoning"},
+        )
+
+        d._toggle_command_overlay()
+
+        d._optical_lifecycle_controller.decide_toggle.assert_called_once()
+        d._command_overlay.cancel_dismiss.assert_not_called()
+        assert d._detector.command_overlay_active is True
+
     def test_toggle_command_overlay_ignores_dismiss_while_optical_summon_in_flight(
         self, main_module, monkeypatch
     ):

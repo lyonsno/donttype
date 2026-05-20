@@ -41,6 +41,87 @@ class LifecycleEvent(enum.Enum):
     PUCKER_COMPLETE = "pucker_complete"
 
 
+class ToggleIntentAction(enum.Enum):
+    """Controller decision for a user toggle intent."""
+
+    DISPATCH = "dispatch"
+    IGNORE = "ignore"
+
+
+class OpticalLifecycleSnapshot(NamedTuple):
+    """Small fact snapshot used by the lifecycle controller."""
+
+    visible: bool
+    visual_ready_pending: bool
+    fade_active: bool
+    fade_direction: int
+    materialization_active: bool
+    materialization_direction: int
+    trajectory: str | None = None
+
+
+class ToggleIntentDecision(NamedTuple):
+    """Controller decision plus trace fields for human smoke diagnosis."""
+
+    action: ToggleIntentAction
+    reason: str
+    trace_fields: dict[str, object]
+
+
+class OpticalLifecycleController:
+    """Thin intent gate for the optical overlay lifecycle.
+
+    The first controller slice owns legality of user toggle intent. Rendering,
+    timers, compositor updates, and AppKit mutation still live in CommandOverlay;
+    callers submit a snapshot here before dispatching a lifecycle mutation.
+    """
+
+    def decide_toggle(
+        self,
+        snapshot: OpticalLifecycleSnapshot,
+    ) -> ToggleIntentDecision:
+        fields = {
+            "visible": snapshot.visible,
+            "visual_ready_pending": snapshot.visual_ready_pending,
+            "fade_active": snapshot.fade_active,
+            "fade_direction": snapshot.fade_direction,
+            "materialization_active": snapshot.materialization_active,
+            "materialization_direction": snapshot.materialization_direction,
+            "trajectory": snapshot.trajectory,
+        }
+        if snapshot.visible and snapshot.visual_ready_pending:
+            return ToggleIntentDecision(
+                ToggleIntentAction.IGNORE,
+                "visible_visual_ready_pending",
+                fields,
+            )
+        if (
+            snapshot.visible
+            and snapshot.fade_active
+            and snapshot.fade_direction > 0
+        ):
+            return ToggleIntentDecision(
+                ToggleIntentAction.IGNORE,
+                "visible_fade_in_in_flight",
+                fields,
+            )
+        if (
+            snapshot.visible
+            and snapshot.materialization_active
+            and snapshot.materialization_direction >= 0
+        ):
+            return ToggleIntentDecision(
+                ToggleIntentAction.IGNORE,
+                "visible_summon_materialization_in_flight",
+                fields,
+            )
+        return ToggleIntentDecision(
+            ToggleIntentAction.DISPATCH,
+            "toggle_dispatch_allowed",
+            fields,
+        )
+
+
 # These constants must match command_overlay.py exactly.  They are
 # imported by command_overlay.py so the adapter owns the numeric retarget law.
 BODY_READY_PROGRESS = 0.55

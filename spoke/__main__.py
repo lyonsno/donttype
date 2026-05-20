@@ -41,6 +41,12 @@ from AppKit import (
 )
 from Foundation import NSMakeRect, NSObject, NSTimer
 
+from .optical_lifecycle import (
+    OpticalLifecycleController,
+    OpticalLifecycleSnapshot,
+    ToggleIntentAction,
+)
+
 _NS_COMMAND_KEY_MASK = 1 << 20
 _NS_KEY_DOWN_MASK = 1 << 10
 _RECORDING_LOAD_SHED_RELEASE_DELAY_S = 0.36
@@ -948,6 +954,7 @@ class SpokeAppDelegate(NSObject):
         self._optical_shell_metrics = OpticalShellMetrics()
         self._capture = AudioCapture(metrics=self._optical_shell_metrics)
         self._capture.warmup()
+        self._optical_lifecycle_controller = OpticalLifecycleController()
         self._local_mode = not bool(transcription_url) and not bool(preview_url)
         (
             self._local_whisper_decode_timeout,
@@ -3344,19 +3351,43 @@ class SpokeAppDelegate(NSObject):
             self._acknowledge_tray_entry(self._tray_index)
             self._dismiss_tray()
 
-    def _command_overlay_toggle_blocked_by_optical_transition(self) -> bool:
+    def _command_overlay_lifecycle_snapshot(self) -> OpticalLifecycleSnapshot:
         overlay = getattr(self, "_command_overlay", None)
-        if overlay is None or not getattr(overlay, "_visible", False):
-            return False
-        if getattr(overlay, "_visual_ready_timer", None) is not None:
-            return True
-        if getattr(overlay, "_fade_direction", 0) > 0 and getattr(
-            overlay, "_fade_timer", None
-        ) is not None:
-            return True
-        if getattr(overlay, "_materialization_timer", None) is not None:
-            return getattr(overlay, "_materialization_direction", 1) >= 0
-        return False
+        if overlay is None:
+            return OpticalLifecycleSnapshot(
+                visible=False,
+                visual_ready_pending=False,
+                fade_active=False,
+                fade_direction=0,
+                materialization_active=False,
+                materialization_direction=0,
+                trajectory=None,
+            )
+
+        def _numeric_attr(name: str, default: int = 0) -> int:
+            value = getattr(overlay, name, default)
+            if isinstance(value, (int, float)):
+                return int(value)
+            return default
+
+        return OpticalLifecycleSnapshot(
+            visible=bool(getattr(overlay, "_visible", False)),
+            visual_ready_pending=getattr(overlay, "_visual_ready_timer", None)
+            is not None,
+            fade_active=getattr(overlay, "_fade_timer", None) is not None,
+            fade_direction=_numeric_attr("_fade_direction"),
+            materialization_active=getattr(overlay, "_materialization_timer", None)
+            is not None,
+            materialization_direction=_numeric_attr("_materialization_direction", 1),
+            trajectory=getattr(overlay, "_optical_lifecycle_trajectory", None),
+        )
+
+    def _command_overlay_toggle_decision(self):
+        controller = getattr(self, "_optical_lifecycle_controller", None)
+        if controller is None:
+            controller = OpticalLifecycleController()
+            self._optical_lifecycle_controller = controller
+        return controller.decide_toggle(self._command_overlay_lifecycle_snapshot())
 
     def _toggle_command_overlay(self) -> None:
         """Toggle command overlay visibility."""
@@ -3382,26 +3413,13 @@ class SpokeAppDelegate(NSObject):
             transcribing=bool(getattr(self, "_transcribing", False)),
             has_snapshot=trace_snapshot is not None,
         )
-        if self._command_overlay_toggle_blocked_by_optical_transition():
+        toggle_decision = self._command_overlay_toggle_decision()
+        if toggle_decision.action is ToggleIntentAction.IGNORE:
             self._detector.command_overlay_active = True
             record_command_overlay_trace(
                 "delegate.toggle.ignored_during_optical_transition",
-                trajectory=getattr(
-                    self._command_overlay,
-                    "_optical_lifecycle_trajectory",
-                    None,
-                ),
-                materialization_direction=getattr(
-                    self._command_overlay,
-                    "_materialization_direction",
-                    None,
-                ),
-                visual_ready_timer=getattr(
-                    self._command_overlay,
-                    "_visual_ready_timer",
-                    None,
-                )
-                is not None,
+                reason=toggle_decision.reason,
+                **toggle_decision.trace_fields,
             )
             return
         if overlay_visible:
