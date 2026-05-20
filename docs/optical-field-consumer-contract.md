@@ -69,6 +69,14 @@ Production consumers must not author `progress`, `phase`,
 request schema rejects those names for finite signals and does not expose them
 as request or disturbance fields.
 
+Compiled House payloads carry `optical_field.presentation_bundle` metadata for
+the material body/content plane coupling. Consumers do not author this field.
+For `materialize` and `dismiss`, House marks both body and content as
+`transitioning`; for stable visible states it marks both as `presented`; for
+hidden states it marks both as `hidden`. Stable body/content split states are
+not part of the public contract. A one-frame diagnostic tear during abusive
+smoke remains an implementation debt, not a consumer capability.
+
 Lawful phase-like surfaces are separate from this production request contract:
 
 - House-owned internal transition metadata.

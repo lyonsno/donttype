@@ -21,6 +21,7 @@ from spoke.optical_lifecycle import (
     OpticalLifecycleSnapshot,
     ToggleIntentAction,
     next_state,
+    presentation_bundle_for_lifecycle_state,
     retarget_progress_for_dismiss,
     should_restore_text_plane,
     should_teardown_pending_entrance,
@@ -312,3 +313,38 @@ class TestOpticalLifecycleController:
 
         assert decision.action is ToggleIntentAction.DISPATCH
         assert decision.reason == "toggle_dispatch_allowed"
+
+
+class TestPresentationBundleContract:
+    def test_materialize_and_dismiss_bundle_body_and_content_as_house_transition(self):
+        materialize = presentation_bundle_for_lifecycle_state("materialize")
+        dismiss = presentation_bundle_for_lifecycle_state("dismiss")
+
+        assert materialize.to_payload() == {
+            "owner": "house",
+            "mode": "transitioning",
+            "body_state": "transitioning",
+            "content_state": "transitioning",
+            "stable_body_content_split_allowed": False,
+            "consumer_authored": False,
+        }
+        assert dismiss.to_payload() == materialize.to_payload()
+
+    def test_rest_and_retarget_bundle_body_and_content_as_presented(self):
+        rest = presentation_bundle_for_lifecycle_state("rest")
+        retarget = presentation_bundle_for_lifecycle_state("retarget")
+
+        assert rest.mode == "presented"
+        assert rest.body_state == "presented"
+        assert rest.content_state == "presented"
+        assert rest.stable_body_content_split_allowed is False
+        assert retarget.to_payload() == rest.to_payload()
+
+    def test_hidden_or_invisible_bundle_body_and_content_as_hidden(self):
+        hidden = presentation_bundle_for_lifecycle_state("hidden")
+        invisible = presentation_bundle_for_lifecycle_state("rest", visible=False)
+
+        assert hidden.mode == "hidden"
+        assert hidden.body_state == "hidden"
+        assert hidden.content_state == "hidden"
+        assert invisible.to_payload() == hidden.to_payload()

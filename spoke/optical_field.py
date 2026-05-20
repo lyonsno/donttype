@@ -12,6 +12,8 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, Literal, Mapping
 
+from .optical_lifecycle import presentation_bundle_for_lifecycle_state
+
 
 OpticalFieldState = Literal[
     "hidden",
@@ -818,6 +820,20 @@ def _with_transition_metadata(
     return optical_field
 
 
+def _presentation_bundle_metadata(request: OpticalFieldRequest) -> dict[str, Any]:
+    """Describe House-owned body/content presentation coupling.
+
+    Consumers request lifecycle state; House owns whether and how the material
+    body and content plane become visible during that state.  This metadata is a
+    contract marker for adapters and reviews, not a consumer-authored phase.
+    """
+
+    return presentation_bundle_for_lifecycle_state(
+        request.state,
+        visible=request.visible,
+    ).to_payload()
+
+
 def compile_placeholder_shell_config(
     request: OpticalFieldRequest,
     transition: OpticalFieldTransitionState | None = None,
@@ -879,6 +895,7 @@ def compile_placeholder_shell_config(
         "motion": request.motion.to_payload(),
         "continuity": request.continuity,
         "signals": tuple(signal.to_payload() for signal in request.signals),
+        "presentation_bundle": _presentation_bundle_metadata(request),
         "provisional": bool(request.provisional),
         "final": not bool(request.provisional),
         "confidence": request.confidence,

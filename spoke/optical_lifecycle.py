@@ -68,6 +68,56 @@ class ToggleIntentDecision(NamedTuple):
     trace_fields: dict[str, object]
 
 
+class PresentationBundleContract(NamedTuple):
+    """House-owned coupling law for material body and content plane."""
+
+    owner: str
+    mode: str
+    body_state: str
+    content_state: str
+    stable_body_content_split_allowed: bool
+    consumer_authored: bool
+
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "owner": self.owner,
+            "mode": self.mode,
+            "body_state": self.body_state,
+            "content_state": self.content_state,
+            "stable_body_content_split_allowed": self.stable_body_content_split_allowed,
+            "consumer_authored": self.consumer_authored,
+        }
+
+
+def presentation_bundle_for_lifecycle_state(
+    state: str,
+    *,
+    visible: bool = True,
+) -> PresentationBundleContract:
+    """Return the House-owned body/content bundle contract for a public state."""
+
+    if state == "hidden" or not visible:
+        mode = "hidden"
+        body_state = "hidden"
+        content_state = "hidden"
+    elif state in {"materialize", "dismiss"}:
+        mode = "transitioning"
+        body_state = "transitioning"
+        content_state = "transitioning"
+    else:
+        mode = "presented"
+        body_state = "presented"
+        content_state = "presented"
+    return PresentationBundleContract(
+        owner="house",
+        mode=mode,
+        body_state=body_state,
+        content_state=content_state,
+        stable_body_content_split_allowed=False,
+        consumer_authored=False,
+    )
+
+
 class OpticalLifecycleController:
     """Thin intent gate for the optical overlay lifecycle.
 

@@ -309,6 +309,50 @@ def test_public_consumer_contract_round_trips_coordinate_content_motion_and_fres
     assert optical_field["confidence"] == pytest.approx(0.76)
 
 
+def test_compiled_requests_carry_house_owned_body_content_bundle_contract():
+    materialize = compile_placeholder_shell_config(
+        OpticalFieldRequest(
+            caller_id="assistant",
+            bounds=OpticalFieldBounds(x=20.0, y=40.0, width=640.0, height=180.0),
+            role="assistant_shell",
+            state="materialize",
+        )
+    )["optical_field"]["presentation_bundle"]
+    rest = compile_placeholder_shell_config(
+        OpticalFieldRequest(
+            caller_id="assistant",
+            bounds=OpticalFieldBounds(x=20.0, y=40.0, width=640.0, height=180.0),
+            role="assistant_shell",
+            state="rest",
+        )
+    )["optical_field"]["presentation_bundle"]
+    dismiss = compile_placeholder_shell_config(
+        OpticalFieldRequest(
+            caller_id="assistant",
+            bounds=OpticalFieldBounds(x=20.0, y=40.0, width=640.0, height=180.0),
+            role="assistant_shell",
+            state="dismiss",
+        )
+    )["optical_field"]["presentation_bundle"]
+
+    assert materialize == {
+        "owner": "house",
+        "mode": "transitioning",
+        "body_state": "transitioning",
+        "content_state": "transitioning",
+        "stable_body_content_split_allowed": False,
+        "consumer_authored": False,
+    }
+    assert rest["mode"] == "presented"
+    assert rest["body_state"] == "presented"
+    assert rest["content_state"] == "presented"
+    assert rest["stable_body_content_split_allowed"] is False
+    assert dismiss["mode"] == "transitioning"
+    assert dismiss["body_state"] == "transitioning"
+    assert dismiss["content_state"] == "transitioning"
+    assert dismiss["stable_body_content_split_allowed"] is False
+
+
 def test_production_consumer_request_schema_excludes_progress_and_phase_custody():
     request_field_names = {field.name for field in fields(OpticalFieldRequest)}
     disturbance_field_names = {field.name for field in fields(OpticalFieldDisturbance)}
@@ -320,6 +364,9 @@ def test_production_consumer_request_schema_excludes_progress_and_phase_custody(
     assert "phase" not in disturbance_field_names
     assert "progress" not in signal_field_names
     assert "phase" not in signal_field_names
+    assert "presentation_bundle" not in request_field_names
+    assert "content_visible" not in request_field_names
+    assert "body_visible" not in request_field_names
 
     kwargs = {
         "caller_id": "preview",
@@ -330,6 +377,10 @@ def test_production_consumer_request_schema_excludes_progress_and_phase_custody(
         OpticalFieldRequest(**kwargs, progress=0.5)  # type: ignore[arg-type]
     with pytest.raises(TypeError):
         OpticalFieldRequest(**kwargs, phase=0.5)  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        OpticalFieldRequest(**kwargs, presentation_bundle={})  # type: ignore[arg-type]
+    with pytest.raises(TypeError):
+        OpticalFieldRequest(**kwargs, content_visible=True)  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="consumer-authored progress/phase"):
         OpticalFieldSignal(name="progress", value=0.5)
     with pytest.raises(ValueError, match="consumer-authored progress/phase"):
