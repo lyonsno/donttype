@@ -4606,6 +4606,36 @@ class TestResultInjection:
 
 
 class TestCommandOverlayToggle:
+    def test_toggle_command_overlay_ignores_dismiss_while_optical_summon_in_flight(
+        self, main_module, monkeypatch
+    ):
+        d = _make_delegate(main_module, monkeypatch)
+        d._command_client = MagicMock()
+        d._command_overlay = MagicMock(_visible=True)
+        d._command_overlay._materialization_timer = object()
+        d._command_overlay._materialization_direction = 1
+        d._command_overlay._optical_lifecycle_trajectory = "summoning"
+
+        d._toggle_command_overlay()
+
+        d._command_overlay.cancel_dismiss.assert_not_called()
+        assert d._detector.command_overlay_active is True
+
+    def test_toggle_command_overlay_allows_recall_during_optical_dismiss(
+        self, main_module, monkeypatch
+    ):
+        d = _make_delegate(main_module, monkeypatch)
+        d._command_client = MagicMock()
+        d._command_client.history = [("inspect", "result")]
+        d._command_overlay = MagicMock(_visible=False)
+        d._command_overlay._materialization_timer = object()
+        d._command_overlay._materialization_direction = -1
+
+        d._toggle_command_overlay()
+
+        d._command_overlay.show.assert_called_once()
+        d._command_overlay.cancel_dismiss.assert_not_called()
+
     def test_toggle_command_overlay_resumes_in_progress_timer_without_reset(
         self, main_module, monkeypatch
     ):
