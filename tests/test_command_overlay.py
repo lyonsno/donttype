@@ -813,6 +813,23 @@ class TestOpticalShellMaterialization:
         assert mask_progresses
         assert 1.0 not in mask_progresses
 
+    def test_full_text_mask_restore_during_summon_compiles_to_current_body_frame(
+        self, mock_pyobjc, monkeypatch
+    ):
+        overlay, mod = _make_overlay(mock_pyobjc)
+        monkeypatch.setattr(mod, "_COMMAND_BACKDROP_OPTICAL_SHELL_ENABLED", True)
+        layer = overlay._scroll_view.layer.return_value
+        overlay._optical_lifecycle_trajectory = "summoning"
+        overlay._materialization_direction = 1
+        overlay._materialization_progress = 0.34
+
+        overlay._update_scroll_materialization_mask(1.0, direction=1)
+
+        layer.setMask_.assert_called()
+        assert layer.setMask_.call_args.args[0] is not None
+        overlay._scroll_view.setAlphaValue_.assert_called()
+        assert overlay._scroll_view.setAlphaValue_.call_args.args[0] < 1.0
+
     def test_show_during_dismiss_seeds_retarget_before_fresh_show_presentation(
         self, mock_pyobjc, monkeypatch
     ):

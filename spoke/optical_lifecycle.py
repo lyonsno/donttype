@@ -89,6 +89,118 @@ class PresentationBundleContract(NamedTuple):
         }
 
 
+class OpticalPresentationFrame(NamedTuple):
+    """Lifecycle-owned coupled body/text presentation frame."""
+
+    trajectory: str
+    body_progress: float
+    body_height_frac: float
+    text_width_frac: float
+    text_height_frac: float
+    text_alpha: float
+    restores_full_text: bool
+    reason: str
+
+
+def _clamp01(value: float) -> float:
+    return max(0.0, min(1.0, float(value)))
+
+
+def compile_optical_presentation_frame(
+    *,
+    trajectory: str | None,
+    body_progress: float,
+    body_height_frac: float,
+    requested_text_width_frac: float,
+    requested_text_height_frac: float,
+    requested_text_alpha: float,
+) -> OpticalPresentationFrame:
+    """Compile one lawful coupled body/text presentation frame.
+
+    This is intentionally visual-mechanics-light: callers still own exact
+    compositor configs and AppKit paths, but no caller may restore the text
+    plane to full-open while the lifecycle trajectory says the body is still
+    transitioning.
+    """
+
+    normalized = (trajectory or "").strip().lower()
+    body_p = _clamp01(body_progress)
+    body_h = _clamp01(body_height_frac)
+    requested_w = _clamp01(requested_text_width_frac)
+    requested_h = _clamp01(requested_text_height_frac)
+    requested_alpha = _clamp01(requested_text_alpha)
+
+    if normalized in {"idle_closed", "hidden", "dismissing_pucker"}:
+        return OpticalPresentationFrame(
+            trajectory=normalized or "hidden",
+            body_progress=body_p,
+            body_height_frac=body_h,
+            text_width_frac=0.0,
+            text_height_frac=0.0,
+            text_alpha=0.0,
+            restores_full_text=False,
+            reason="hidden",
+        )
+
+    if normalized == "idle_open":
+        return OpticalPresentationFrame(
+            trajectory=normalized,
+            body_progress=body_p,
+            body_height_frac=body_h,
+            text_width_frac=requested_w,
+            text_height_frac=requested_h,
+            text_alpha=requested_alpha,
+            restores_full_text=(
+                requested_w >= 0.99
+                and requested_h >= 0.99
+                and requested_alpha >= 0.99
+            ),
+            reason="idle_open",
+        )
+
+    if normalized in {"summoning", "materialize"}:
+        lawful_h = min(requested_h, body_h, body_p)
+        return OpticalPresentationFrame(
+            trajectory=normalized,
+            body_progress=body_p,
+            body_height_frac=body_h,
+            text_width_frac=requested_w,
+            text_height_frac=lawful_h,
+            text_alpha=min(requested_alpha, lawful_h),
+            restores_full_text=(
+                body_p >= 0.999
+                and body_h >= 0.99
+                and requested_w >= 0.99
+                and requested_h >= 0.99
+                and requested_alpha >= 0.99
+            ),
+            reason="summoning_transition",
+        )
+
+    if normalized in {"dismissing", "dismiss"}:
+        return OpticalPresentationFrame(
+            trajectory=normalized,
+            body_progress=body_p,
+            body_height_frac=body_h,
+            text_width_frac=requested_w,
+            text_height_frac=requested_h,
+            text_alpha=requested_alpha,
+            restores_full_text=False,
+            reason="dismissing_transition",
+        )
+
+    return OpticalPresentationFrame(
+        trajectory=normalized or "unknown",
+        body_progress=body_p,
+        body_height_frac=body_h,
+        text_width_frac=requested_w,
+        text_height_frac=requested_h,
+        text_alpha=requested_alpha,
+        restores_full_text=False,
+        reason="unknown_transition",
+    )
+
+
 def presentation_bundle_for_lifecycle_state(
     state: str,
     *,

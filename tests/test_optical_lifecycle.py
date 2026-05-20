@@ -19,6 +19,7 @@ from spoke.optical_lifecycle import (
     LifecycleState,
     OpticalLifecycleController,
     OpticalLifecycleSnapshot,
+    compile_optical_presentation_frame,
     ToggleIntentAction,
     next_state,
     presentation_bundle_for_lifecycle_state,
@@ -355,3 +356,52 @@ class TestPresentationBundleContract:
         assert dismiss.mode == "transitioning"
         assert dismiss.body_state == "transitioning"
         assert dismiss.content_state == "transitioning"
+
+
+class TestOpticalPresentationFrameCompiler:
+    def test_summoning_frame_caps_text_to_current_body_progress(self):
+        frame = compile_optical_presentation_frame(
+            trajectory="summoning",
+            body_progress=0.34,
+            body_height_frac=1.0,
+            requested_text_width_frac=1.0,
+            requested_text_height_frac=1.0,
+            requested_text_alpha=1.0,
+        )
+
+        assert frame.text_height_frac == pytest.approx(0.34)
+        assert frame.text_alpha < 1.0
+        assert frame.restores_full_text is False
+        assert frame.reason == "summoning_transition"
+
+    def test_idle_open_allows_full_text_restore(self):
+        frame = compile_optical_presentation_frame(
+            trajectory="idle_open",
+            body_progress=1.0,
+            body_height_frac=1.0,
+            requested_text_width_frac=1.0,
+            requested_text_height_frac=1.0,
+            requested_text_alpha=1.0,
+        )
+
+        assert frame.text_width_frac == pytest.approx(1.0)
+        assert frame.text_height_frac == pytest.approx(1.0)
+        assert frame.text_alpha == pytest.approx(1.0)
+        assert frame.restores_full_text is True
+        assert frame.reason == "idle_open"
+
+    def test_dismissing_frame_preserves_collapse_shape_without_full_restore(self):
+        frame = compile_optical_presentation_frame(
+            trajectory="dismissing",
+            body_progress=0.42,
+            body_height_frac=0.5,
+            requested_text_width_frac=0.2,
+            requested_text_height_frac=0.1,
+            requested_text_alpha=0.4,
+        )
+
+        assert frame.text_width_frac == pytest.approx(0.2)
+        assert frame.text_height_frac == pytest.approx(0.1)
+        assert frame.text_alpha == pytest.approx(0.4)
+        assert frame.restores_full_text is False
+        assert frame.reason == "dismissing_transition"

@@ -50,6 +50,7 @@ from .command_overlay_trace import record_command_overlay_trace
 from .optical_lifecycle import (
     BODY_READY_PROGRESS,
     MAG_SEED_FRAC,
+    compile_optical_presentation_frame,
     retarget_progress_for_dismiss,
 )
 from .overlay import (
@@ -4161,37 +4162,55 @@ class CommandOverlay(NSObject):
         if layer is None:
             return
         hf = _clamp01(height_frac)
-        if direction >= 0 and hf >= 0.99:
-            # Fully open — remove mask and restore full alpha
-            if hasattr(layer, "setMask_"):
-                layer.setMask_(None)
-            if hasattr(scroll, "setAlphaValue_"):
-                scroll.setAlphaValue_(1.0)
-            self._scroll_materialization_mask = None
-            return
         try:
             frame = scroll.frame()
             w = float(frame.size.width)
             h = float(frame.size.height)
         except Exception:
             return
+        lifecycle_trajectory = getattr(self, "_optical_lifecycle_trajectory", None)
+        if not lifecycle_trajectory:
+            lifecycle_trajectory = "summoning" if direction >= 0 else "dismissing"
+        if progress is not None:
+            body_progress = progress
+        elif direction >= 0 and str(lifecycle_trajectory).lower() in {"summoning", "materialize"}:
+            body_progress = getattr(self, "_materialization_progress", hf)
+        else:
+            body_progress = hf
         if direction >= 0:
             # Entrance: start full width, thin horizontal slit, expand vertically.
             # Width is always full. Height ramps with height_frac.
-            visible_w = w
-            visible_h = max(h * hf, 0.0)
-            x_offset = 0.0
-            # Also fade the scroll view in quickly during the initial squeeze
-            if hasattr(scroll, "setAlphaValue_"):
-                alpha = min(hf * 5.0, 1.0)  # fade in over first 20% of height_frac
-                scroll.setAlphaValue_(alpha)
+            requested_width_frac = 1.0
+            requested_height_frac = hf
+            requested_alpha = min(hf * 5.0, 1.0)
         else:
             text_state = _dismiss_text_collapse_state(hf if progress is None else progress)
-            visible_w = max(w * text_state["width_frac"], 0.0)
-            visible_h = max(h * text_state["height_frac"], 0.0)
-            x_offset = (w - visible_w) * 0.5
+            requested_width_frac = text_state["width_frac"]
+            requested_height_frac = text_state["height_frac"]
+            requested_alpha = text_state["alpha"]
+        presentation_frame = compile_optical_presentation_frame(
+            trajectory=lifecycle_trajectory,
+            body_progress=body_progress,
+            body_height_frac=hf,
+            requested_text_width_frac=requested_width_frac,
+            requested_text_height_frac=requested_height_frac,
+            requested_text_alpha=requested_alpha,
+        )
+        if direction >= 0 and presentation_frame.restores_full_text:
+            # Fully open — remove mask and restore full alpha.
+            if hasattr(layer, "setMask_"):
+                layer.setMask_(None)
             if hasattr(scroll, "setAlphaValue_"):
-                scroll.setAlphaValue_(text_state["alpha"])
+                scroll.setAlphaValue_(1.0)
+            self._scroll_materialization_mask = None
+            return
+        visible_w = max(w * presentation_frame.text_width_frac, 0.0)
+        visible_h = max(h * presentation_frame.text_height_frac, 0.0)
+        x_offset = (w - visible_w) * 0.5
+        if direction >= 0 and presentation_frame.text_width_frac >= 0.999:
+            x_offset = 0.0
+        if hasattr(scroll, "setAlphaValue_"):
+            scroll.setAlphaValue_(presentation_frame.text_alpha)
         y_offset = (h - visible_h) * 0.5
         corner_r = min(12.0, visible_h * 0.5, visible_w * 0.5)
         mask = getattr(self, "_scroll_materialization_mask", None)
