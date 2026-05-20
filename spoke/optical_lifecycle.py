@@ -96,7 +96,7 @@ def presentation_bundle_for_lifecycle_state(
 ) -> PresentationBundleContract:
     """Return the House-owned body/content bundle contract for a public state."""
 
-    if state == "hidden" or not visible:
+    if state == "hidden":
         mode = "hidden"
         body_state = "hidden"
         content_state = "hidden"
@@ -104,6 +104,10 @@ def presentation_bundle_for_lifecycle_state(
         mode = "transitioning"
         body_state = "transitioning"
         content_state = "transitioning"
+    elif not visible:
+        mode = "hidden"
+        body_state = "hidden"
+        content_state = "hidden"
     else:
         mode = "presented"
         body_state = "presented"

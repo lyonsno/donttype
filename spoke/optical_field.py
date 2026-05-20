@@ -82,6 +82,24 @@ _FORBIDDEN_CONSUMER_ANIMATION_NAMES = {
     "animation_phase",
 }
 
+_FORBIDDEN_PRESENTATION_CUSTODY_NAMES = {
+    "presentation_bundle",
+    "body_visible",
+    "content_visible",
+    "body_state",
+    "content_state",
+}
+
+_OPTICAL_FIELD_STATES = {
+    "hidden",
+    "materialize",
+    "rest",
+    "resize",
+    "recenter",
+    "retarget",
+    "dismiss",
+}
+
 _COORDINATE_SPACES = {
     "display_local",
     "display_points",
@@ -287,6 +305,8 @@ class OpticalFieldDisturbance:
             raise ValueError("disturbance kind must be non-empty")
         if _is_forbidden_animation_name(self.kind):
             raise ValueError("consumer-authored progress/phase is not a production field")
+        if _is_forbidden_presentation_custody_name(self.kind):
+            raise ValueError("consumer-authored presentation custody is not a production field")
         if self.strength < 0.0:
             raise ValueError("disturbance strength must be non-negative")
         object.__setattr__(self, "params", MappingProxyType(dict(self.params)))
@@ -358,6 +378,8 @@ class OpticalFieldSignal:
             raise ValueError("signal name must be non-empty")
         if _is_forbidden_animation_name(self.name):
             raise ValueError("consumer-authored progress/phase is not a production field")
+        if _is_forbidden_presentation_custody_name(self.name):
+            raise ValueError("consumer-authored presentation custody is not a production field")
         object.__setattr__(self, "params", MappingProxyType(dict(self.params)))
 
     def to_payload(self) -> dict[str, Any]:
@@ -463,6 +485,8 @@ class OpticalFieldRequest:
             raise ValueError("caller_id must be non-empty")
         if not self.role:
             raise ValueError("role must be non-empty")
+        if self.state not in _OPTICAL_FIELD_STATES:
+            raise ValueError(f"unknown optical field lifecycle state: {self.state}")
         if self.continuity_key is None:
             object.__setattr__(self, "continuity_key", self.caller_id)
         elif not self.continuity_key:
@@ -500,6 +524,15 @@ def _is_forbidden_animation_name(name: str) -> bool:
     normalized = name.strip().lower().replace("-", "_")
     dotted = normalized.replace("_", ".")
     return normalized in _FORBIDDEN_CONSUMER_ANIMATION_NAMES or dotted in _FORBIDDEN_CONSUMER_ANIMATION_NAMES
+
+
+def _is_forbidden_presentation_custody_name(name: str) -> bool:
+    normalized = name.strip().lower().replace("-", "_")
+    dotted = normalized.replace("_", ".")
+    return (
+        normalized in _FORBIDDEN_PRESENTATION_CUSTODY_NAMES
+        or dotted in _FORBIDDEN_PRESENTATION_CUSTODY_NAMES
+    )
 
 
 @dataclass(frozen=True)

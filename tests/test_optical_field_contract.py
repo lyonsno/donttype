@@ -381,10 +381,23 @@ def test_production_consumer_request_schema_excludes_progress_and_phase_custody(
         OpticalFieldRequest(**kwargs, presentation_bundle={})  # type: ignore[arg-type]
     with pytest.raises(TypeError):
         OpticalFieldRequest(**kwargs, content_visible=True)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="unknown optical field lifecycle state"):
+        OpticalFieldRequest(**kwargs, state="content_hidden")  # type: ignore[arg-type]
     with pytest.raises(ValueError, match="consumer-authored progress/phase"):
         OpticalFieldSignal(name="progress", value=0.5)
     with pytest.raises(ValueError, match="consumer-authored progress/phase"):
         OpticalFieldSignal(name="transition.phase", value=0.5)
+    for name in (
+        "presentation_bundle",
+        "body_visible",
+        "content_visible",
+        "body_state",
+        "content_state",
+    ):
+        with pytest.raises(ValueError, match="consumer-authored presentation custody"):
+            OpticalFieldSignal(name=name, value=True)
+        with pytest.raises(ValueError, match="consumer-authored presentation custody"):
+            OpticalFieldDisturbance(disturbance_id=name, kind=name)
 
 
 def test_legacy_minimal_requests_compile_with_explicit_public_contract_defaults():

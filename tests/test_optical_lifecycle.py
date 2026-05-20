@@ -348,3 +348,10 @@ class TestPresentationBundleContract:
         assert hidden.body_state == "hidden"
         assert hidden.content_state == "hidden"
         assert invisible.to_payload() == hidden.to_payload()
+
+    def test_dismiss_remains_transitioning_even_when_request_is_not_visible(self):
+        dismiss = presentation_bundle_for_lifecycle_state("dismiss", visible=False)
+
+        assert dismiss.mode == "transitioning"
+        assert dismiss.body_state == "transitioning"
+        assert dismiss.content_state == "transitioning"
